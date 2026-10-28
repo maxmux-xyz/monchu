@@ -1,19 +1,20 @@
 /**
  * The editor: Enter sends (adds a line on a touch screen), Shift-Enter adds a line, Esc stops a running front (or closes
- * the typeahead, or leaves a queued message's edit); the key bar under it taps the same and toggles steer and expand.
+ * the typeahead, or leaves a queued message's edit); Stop and edit actions appear inline when needed.
  * No key here is one a browser or the system binds. Typeahead lists the terminal's commands with their help, then skills
  * as `/skill:<name>`, from the same command table, and after a command, what its first argument can be. A pick (`choice`) opens in the same place: the editor's box filters
  * it while the draft waits, so the box never moves and a touch keyboard stays up.
  */
-import { useComputed, useSignal } from "@preact/signals";
+import { signal, useComputed, useSignal } from "@preact/signals";
 import { useEffect, useLayoutEffect, useRef } from "preact/hooks";
 import type { Client } from "../api/client.ts";
-import { addFiles, AttachButton, AttachmentTray, PasteButton } from "./attachments.tsx";
+import { addFiles, FileInput, AttachmentTray } from "./attachments.tsx";
 import { run, runWebCommand, slashCommands } from "./commands.ts";
 import { argumentRows } from "./completions.ts";
-import { Keys, PickKeys } from "./keys.tsx";
+import { ComposerActions, PickKeys } from "./keys.tsx";
 import { matching, Menu, type MenuItem } from "./menu.tsx";
 import {
+  closeSheet,
   attachFile,
   choice,
   client,
@@ -37,9 +38,6 @@ import {
   workers,
 } from "./state.ts";
 import { openAsks } from "./transcript.tsx";
-import { PinsSheet, PINS } from "./pins.tsx";
-import { RootsNew, RootsSheet, ROOTS } from "./roots.tsx";
-import { WorkersSheet, WORKERS } from "./workers.tsx";
 import { filterKey, SheetBack } from "./sheet.tsx";
 import { feedRows } from "./feed.ts";
 
@@ -75,12 +73,7 @@ function suggestions(text: string, core: Client | undefined): { items: MenuItem[
   return { items, query: text.slice(1) };
 }
 
-/** Each kind of sheet: its view, its keys, and the primary cell right of the filter, if it has one. */
-const SHEETS = {
-  roots: { View: RootsSheet, spec: ROOTS, Primary: RootsNew },
-  workers: { View: WorkersSheet, spec: WORKERS, Primary: undefined },
-  pins: { View: PinsSheet, spec: PINS, Primary: undefined },
-};
+const sheets = signal<typeof import("./panels.tsx").SHEETS | undefined>(undefined);
 
 export function Editor() {
   const selected = useSignal(0);
@@ -89,7 +82,21 @@ export function Editor() {
   const picking = choice.value;
   // A menu over the editor gives way to a pick or question it opened, such as a rename.
   const sheetOpen = picking === undefined ? sheet.value : undefined;
-  const kind = sheetOpen === undefined ? undefined : SHEETS[sheetOpen.kind];
+  const kind = sheetOpen === undefined ? undefined : sheets.value?.[sheetOpen.kind];
+  useEffect(() => {
+    if (sheetOpen === undefined || sheets.peek() !== undefined) return;
+    void import("./panels.tsx")
+      .then((module) => {
+        sheets.value = module.SHEETS;
+      })
+      .catch((error: unknown) => {
+        closeSheet();
+        notice(
+          `Cannot open menu: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      });
+  }, [sheetOpen !== undefined]);
   // A pick's filter and whether its alternate (Shift+Enter) is on; both start afresh with each pick.
   const query = useSignal("");
   const second = useSignal(false);
@@ -139,22 +146,6 @@ export function Editor() {
     setDraft(rest);
     run("send", text);
   };
-  // Pasted text goes in at the caret, as a paste would put it.
-  const insert = (text: string) => {
-    const element = area.current;
-    const value = picking === undefined ? draft.value : query.value;
-    const start = element?.selectionStart ?? value.length;
-    const end = element?.selectionEnd ?? value.length;
-    const next = value.slice(0, start) + text + value.slice(end);
-    if (picking !== undefined) query.value = next;
-    else {
-      forgetRetry();
-      setDraft(next);
-    }
-    requestAnimationFrame(() =>
-      element?.setSelectionRange(start + text.length, start + text.length),
-    );
-  };
   // Pasted images and files attach wherever the page has focus (the editor, or the page in a key plugin's normal mode);
   // text pastes as usual. The secret form is the one place a paste stays its own.
   useEffect(() => {
@@ -193,7 +184,7 @@ export function Editor() {
   };
 
   return (
-    // A landmark, so the editor, its key bar and any menu over it are a named region of the page.
+    // A landmark, so the editor, its message actions and any menu over it are a named region of the page.
     <section
       class="editor"
       aria-label="editor"
@@ -207,6 +198,7 @@ export function Editor() {
         attach(files);
       }}
     >
+      <FileInput onFiles={attach} />
       {sheetOpen !== undefined && kind !== undefined ? (
         <kind.View open={sheetOpen} />
       ) : picking !== undefined ? (
@@ -369,7 +361,7 @@ export function Editor() {
             }
             if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
               const item = items[selected.value];
-              // A touch keyboard has no Shift: its Enter adds a line, and the key bar sends.
+              // A touch keyboard has no Shift: its Enter adds a line, and the Send button sends.
               if (item === undefined && matchMedia("(pointer: coarse)").matches) return;
               event.preventDefault();
               // A half-typed command takes the suggestion; an exact one, or one with arguments, is sent as typed.
@@ -379,24 +371,17 @@ export function Editor() {
           }}
         />
         {kind?.Primary === undefined ? null : <kind.Primary />}
-      </div>
-      {sheetOpen !== undefined ? null : picking !== undefined ? (
-        <PickKeys
-          alternate={picking.alternate}
-          on={second.value}
-          toggle={() => (second.value = !second.value)}
-          choose={() => take(items[selected.value])}
-        />
-      ) : (
-        <Keys send={send}>
-          <AttachButton onFiles={attach} />
-          <PasteButton
-            onFiles={attach}
-            onText={insert}
-            onError={(message) => notice(message, "warning")}
+        {sheetOpen !== undefined ? null : picking !== undefined ? (
+          <PickKeys
+            alternate={picking.alternate}
+            on={second.value}
+            toggle={() => (second.value = !second.value)}
+            choose={() => take(items[selected.value])}
           />
-        </Keys>
-      )}
+        ) : (
+          <ComposerActions send={send} />
+        )}
+      </div>
     </section>
   );
 }

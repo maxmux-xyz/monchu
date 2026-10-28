@@ -1,4 +1,5 @@
-import { defineDoc, type ConversationId } from "@earendil-works/pi-durable";
+import { defineDoc, type ConversationId, type TaskId } from "@earendil-works/pi-durable";
+import type { SessionDirectory } from "../../api/directories.ts";
 import { shortId } from "../../api/ids.ts";
 
 /** One root: an ownerless front conversation with its own crew. Never deleted; archiving only hides it. */
@@ -14,6 +15,9 @@ export type RootRecord = {
   archived?: true;
   /** The request that created it, so a retried create returns the same root. */
   requestId?: string;
+  directory?: SessionDirectory;
+  spawnedBy?: ConversationId;
+  startupTask?: TaskId;
 };
 
 /** Every root of the home, in creation order. The first is Durable's reserved root. */

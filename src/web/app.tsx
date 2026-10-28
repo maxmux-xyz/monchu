@@ -6,7 +6,7 @@ import { TopBar } from "./bar.tsx";
 import { ClientPanel, InstallOffer } from "./client.tsx";
 import { Editor } from "./editor.tsx";
 import { MODE } from "./keys.tsx";
-import { GoalsPanel, JobsPanel } from "./lists.tsx";
+
 import { Close } from "./panel.tsx";
 import { entering, SecretForm, SecretRequests, SecretsPanel } from "./secrets.tsx";
 import { SendingRows, sendingAny } from "./sending.tsx";
@@ -20,14 +20,89 @@ import {
   editing,
   loginStatus,
   panel,
-  pins,
-  inbox,
   shown,
   view,
   whole,
+  roots,
+  rootId,
+  directoriesShown,
 } from "./state.ts";
-import { FilterBar } from "./inbox.tsx";
 import { Transcript } from "./transcript.tsx";
+import { Sessions, directoryForm, assignSessionDirectory } from "./sessions.tsx";
+import { useEffect } from "preact/hooks";
+
+const lists = signal<typeof import("./panels.tsx") | undefined>(undefined);
+function WorkPanel() {
+  const error = useSignal("");
+  useEffect(() => {
+    void import("./panels.tsx")
+      .then((module) => {
+        lists.value = module;
+      })
+      .catch((failure: unknown) => {
+        error.value = failure instanceof Error ? failure.message : String(failure);
+      });
+  }, []);
+  const loaded = lists.value;
+  return loaded === undefined ? (
+    <main class="transcript">{error.value || "Loading…"}</main>
+  ) : panel.value === "goals" ? (
+    <loaded.GoalsPanel />
+  ) : (
+    <loaded.JobsPanel />
+  );
+}
+
+const directoryPanels = signal<typeof import("./panels.tsx").DirectoryPanels | undefined>(
+  undefined,
+);
+const directoryLoadError = signal("");
+
+function DirectoryPanel({ catalog = false }: { catalog?: boolean }) {
+  const owned = roots.value.find((item) => item.id === rootId.value)?.directory;
+  const form = directoryForm.value;
+  useEffect(() => {
+    if (directoryPanels.peek() !== undefined || (!owned && !form && !catalog)) return;
+    void import("./panels.tsx")
+      .then((module) => {
+        directoryPanels.value = module.DirectoryPanels;
+      })
+      .catch((error: unknown) => {
+        directoryLoadError.value = error instanceof Error ? error.message : String(error);
+      });
+  }, [owned, form, catalog]);
+  const Loaded = directoryPanels.value;
+  return Loaded ? (
+    <Loaded catalog={catalog} />
+  ) : (
+    <aside
+      class={catalog ? "directory-catalog" : "directory-files"}
+      aria-label={catalog ? "Directories" : "Owned directory files"}
+    >
+      <header>
+        <strong>Owned files</strong>
+      </header>
+      <div class="directory-empty">
+        {directoryLoadError.value ? (
+          <p role="alert">{directoryLoadError.value}. Reload to retry.</p>
+        ) : owned || form || catalog ? (
+          <p>Loading…</p>
+        ) : (
+          <>
+            <p>This session has no owned directory.</p>
+            <button
+              type="button"
+              onClick={assignSessionDirectory}
+              disabled={rootId.value === undefined}
+            >
+              Assign directory
+            </button>
+          </>
+        )}
+      </div>
+    </aside>
+  );
+}
 
 function Ask() {
   const current = ask.value;
@@ -296,46 +371,77 @@ function Queue() {
 
 export function App() {
   const state = view(shown.value)?.value;
-  // The front's lenses, while its stream is shown: with anything in it or pinned.
-  const lenses =
-    shown.value === undefined &&
-    panel.value === undefined &&
-    (inbox.value.length > 0 || pins.value.length > 0);
+  const active = roots.value.find((item) => item.id === rootId.value);
   return (
     <>
-      <TopBar lenses={lenses ? <FilterBar /> : null} />
-      {panel.value === "client" ? (
-        <ClientPanel />
-      ) : panel.value === "secrets" ? (
-        <SecretsPanel />
-      ) : panel.value === "goals" ? (
-        <GoalsPanel />
-      ) : panel.value === "jobs" ? (
-        <JobsPanel />
-      ) : state === undefined ? (
-        <main class="transcript">connecting…{linkError.value ? ` ${linkError.value}` : ""}</main>
+      {active?.directory === undefined ? (
+        <header class="hidden">
+          <h1>Sessions</h1>
+        </header>
       ) : (
-        <>
-          <Transcript
-            key={state.conversation.id}
-            view={whole(shown.value)?.value ?? state}
-            front={shown.value === undefined}
-          />
-        </>
+        <header class="session-repository">
+          <h1>{active.directory.repoPath}</h1>
+        </header>
       )}
-      <Queue />
-      <Login />
-      <InstallOffer />
-      <SecretRequests />
-      {/* A pick opens over the editor, which stays to filter it. */}
-      {choice.value === undefined && ask.value !== undefined ? (
-        <Ask />
-      ) : choice.value === undefined && entering.value !== undefined ? (
-        <SecretForm />
-      ) : (
-        <Editor />
-      )}
-      <Footer />
+      <div class="compact-navigation">
+        <TopBar />
+      </div>
+      <div class="session-layout">
+        <Sessions />
+        {directoriesShown.value ? (
+          <DirectoryPanel catalog />
+        ) : (
+          <>
+            <div class="chat-pane">
+              <div class="chat-toolbar" role="region" aria-label="Session status">
+                <strong>Chat</strong>
+                <span>
+                  {active?.error
+                    ? "! failed"
+                    : active?.status === "working"
+                      ? "● working"
+                      : active?.needsInput
+                        ? "? needs you"
+                        : "○ idle"}
+                </span>
+              </div>
+              {panel.value === "client" ? (
+                <ClientPanel />
+              ) : panel.value === "secrets" ? (
+                <SecretsPanel />
+              ) : panel.value === "goals" || panel.value === "jobs" ? (
+                <WorkPanel />
+              ) : state === undefined ? (
+                <main class="transcript">
+                  connecting…{linkError.value ? ` ${linkError.value}` : ""}
+                </main>
+              ) : (
+                <>
+                  <Transcript
+                    key={state.conversation.id}
+                    view={whole(shown.value)?.value ?? state}
+                    front={shown.value === undefined}
+                  />
+                </>
+              )}
+              <Queue />
+              <Login />
+              <InstallOffer />
+              <SecretRequests />
+              {/* A pick opens over the editor, which stays to filter it. */}
+              {choice.value === undefined && ask.value !== undefined ? (
+                <Ask />
+              ) : choice.value === undefined && entering.value !== undefined ? (
+                <SecretForm />
+              ) : (
+                <Editor />
+              )}
+              <Footer />
+            </div>
+            <DirectoryPanel />
+          </>
+        )}
+      </div>
     </>
   );
 }

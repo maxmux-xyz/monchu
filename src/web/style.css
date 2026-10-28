@@ -121,21 +121,6 @@ pre {
   flex-wrap: wrap;
   border-bottom: 1px solid var(--line);
 }
-/* The lenses take a second row on a phone, and sit between the bar's two ends where there is room. */
-.agents .filters {
-  order: 1;
-  flex-basis: 100%;
-  border-bottom: none;
-  border-top: 1px solid var(--line);
-}
-@media (min-width: 720px) {
-  .agents .filters {
-    order: 0;
-    flex-basis: auto;
-    border-top: none;
-    border-left: 1px solid var(--line);
-  }
-}
 .agents button {
   display: flex;
   align-items: center;
@@ -498,7 +483,8 @@ pre {
 }
 .keys {
   display: flex;
-  border-top: 1px solid var(--line);
+  align-items: center;
+  border-left: 1px solid var(--line);
 }
 .keys button {
   min-height: var(--tap);
@@ -509,13 +495,6 @@ pre {
 }
 .keys button[aria-pressed="true"] {
   background: var(--fg);
-  color: var(--bg);
-}
-.keys .mode {
-  padding: 0;
-}
-.keys .mode.steer {
-  background: var(--yellow);
   color: var(--bg);
 }
 .keys .send {
@@ -1012,42 +991,6 @@ p.offer {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* The inbox: a bar filtering the front's stream, asks boxed until answered, labels after the stamp. */
-.filters {
-  display: flex;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--line);
-}
-.filters button {
-  gap: 0;
-  min-height: var(--tap);
-  padding: 0 var(--s1);
-  border: none;
-  border-right: 1px solid var(--line);
-  white-space: nowrap;
-}
-.filters .icon {
-  padding: 0;
-}
-.filters .n {
-  margin-left: 2px;
-  font-size: calc(1em / 1.15);
-  font-weight: bold;
-}
-.filters [aria-pressed="true"] {
-  background: var(--fg);
-  color: var(--bg);
-}
-.filters .pins {
-  margin-left: auto;
-  border-left: 1px solid var(--line);
-}
-.filters .goal {
-  gap: var(--s0);
-}
-.filters .goal .glyph {
-  font-size: 1.15em;
-}
 /* An open ask: a bar bolder than a user message's down its side, with room under its reply button; no box. */
 .askCard {
   display: flex;
@@ -1235,4 +1178,356 @@ p.offer {
 }
 .editor .line > button:last-child {
   border-left: 1px solid var(--line);
+}
+
+/* Directory sessions share the existing transcript and editor. */
+#app:has(.session-layout) {
+  max-width: none;
+}
+.session-repository {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  min-height: var(--row);
+}
+.session-repository h1 {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font: inherit;
+  font-weight: bold;
+  margin: 0;
+}
+.session-layout {
+  display: grid;
+  grid-template-columns: minmax(200px, 20%) minmax(0, 1fr) minmax(280px, 40%);
+  flex: 1;
+  min-height: 0;
+}
+.sessions {
+  border-right: 1px solid var(--line);
+  padding: var(--s1);
+  overflow: auto;
+  min-width: 0;
+  background: var(--card);
+}
+.sessions > header,
+.directory-files > header,
+.chat-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s0) var(--s1);
+  min-height: var(--row);
+}
+.sessions > header button {
+  min-height: var(--tap);
+}
+.sessions ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sessions ul ul {
+  margin-left: var(--s1);
+  padding-left: var(--s1);
+}
+.sessions li {
+  position: relative;
+}
+.sessions ul ul > li::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--s1));
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--muted);
+}
+.sessions ul ul > li::after {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--s1));
+  top: 16px;
+  width: var(--s1);
+  border-top: 1px solid var(--muted);
+}
+.sessions ul ul > li:last-child::before {
+  bottom: auto;
+  height: 16px;
+}
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  text-align: left;
+  width: 100%;
+  min-height: var(--tap);
+  padding: var(--s0) var(--s1);
+  border: 0;
+  background: transparent;
+}
+.session-row > span:last-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.session-row.on,
+.directory-list button.on {
+  background: var(--fg);
+  color: var(--bg);
+}
+.chat-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+.chat-toolbar {
+  border-bottom: 1px solid var(--line);
+}
+.chat-toolbar > span {
+  color: var(--muted);
+}
+.directory-files {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+}
+.directory-files > header {
+  border-bottom: 1px solid var(--line);
+}
+.directory-path,
+.directory-empty {
+  padding: var(--s2);
+  overflow-wrap: anywhere;
+}
+.directory-path,
+.directory-filename {
+  color: var(--muted);
+}
+.directory-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s0);
+  padding: 0 var(--s2) var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.directory-list button,
+.directory-up,
+.directory-empty button {
+  min-height: var(--tap);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.directory-up {
+  margin: 0 var(--s2) var(--s1);
+}
+.directory-document {
+  padding: var(--s2);
+  overflow-wrap: anywhere;
+}
+.directory-filename {
+  margin-bottom: var(--s2);
+}
+.directory-error {
+  padding: var(--s2);
+  color: var(--red);
+}
+.session-form {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  background: var(--bg);
+  overflow: auto;
+  padding: var(--s2);
+}
+.session-form form {
+  max-width: 64ch;
+  margin: 0 auto;
+}
+.session-form header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.session-form header button,
+.session-form-actions button {
+  min-height: var(--tap);
+}
+.session-form label {
+  display: block;
+  margin-top: var(--s2);
+}
+.session-form input,
+.session-form textarea,
+.session-form select {
+  display: block;
+  width: 100%;
+  padding: var(--s1);
+  margin-top: var(--s0);
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+.session-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s2);
+}
+.session-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s1);
+  margin-top: var(--s2);
+}
+.session-form [role="alert"] {
+  color: var(--red);
+}
+.compact-navigation {
+  display: none;
+}
+@media (max-width: 720px) {
+  .session-layout {
+    display: flex;
+  }
+  .sessions,
+  .directory-files {
+    display: none;
+  }
+  .chat-pane {
+    flex: 1;
+  }
+  .compact-navigation {
+    display: block;
+  }
+}
+
+.directory-catalog {
+  grid-column: 2 / -1;
+  overflow: auto;
+  padding: var(--s2);
+}
+.directory-catalog form {
+  display: flex;
+  align-items: end;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+}
+.directory-catalog label {
+  display: block;
+  flex: 1;
+}
+.directory-catalog input {
+  display: block;
+  width: 100%;
+  font: inherit;
+  padding: var(--s1);
+  margin-top: var(--s0);
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+}
+.directory-catalog button {
+  min-height: var(--tap);
+}
+.directory-catalog ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.directory-catalog li button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  padding: var(--s2);
+  border: 0;
+  border-top: 1px solid var(--line);
+  text-align: left;
+}
+.directory-catalog li span:first-child {
+  min-width: 0;
+}
+.directory-catalog small {
+  display: block;
+  color: var(--muted);
+  font: inherit;
+  overflow-wrap: anywhere;
+  margin-top: var(--s0);
+}
+.directory-catalog [role="alert"] {
+  color: var(--red);
+}
+.session-form details {
+  margin-top: var(--s2);
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s1);
+  border-left: 1px solid var(--line);
+}
+.composer-actions button {
+  min-height: var(--tap);
+  padding: 0 var(--s2);
+  border: none;
+}
+.composer-actions .send {
+  font-weight: bold;
+}
+
+.directory-input-line,
+.folder-navigation {
+  display: flex;
+  gap: var(--s0);
+  align-items: stretch;
+}
+.directory-input-line input {
+  flex: 1;
+  min-width: 0;
+}
+.directory-input-line button {
+  margin-top: var(--s0);
+}
+.folder-picker {
+  border: 1px solid var(--line);
+  padding: var(--s1);
+  margin-top: var(--s0);
+}
+.folder-navigation button:last-child {
+  margin-left: auto;
+}
+.folder-path {
+  overflow-wrap: anywhere;
+  margin: var(--s1) 0;
+}
+.folder-picker ul {
+  list-style: none;
+  padding: 0;
+  margin: var(--s1) 0;
+  max-height: 30vh;
+  overflow: auto;
+}
+.folder-picker li button {
+  width: 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.folder-picker button {
+  min-height: var(--tap);
+}
+.directory-catalog form > .directory-input {
+  flex: 1;
+  min-width: 0;
 }

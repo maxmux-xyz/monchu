@@ -58,7 +58,14 @@ export function createDevProvider(): Provider {
   faux.setResponses(
     Array.from({ length: 10_000 }, () => (request, _options, _state, model) => {
       const last = request.messages.findLast((message) => message.role !== "system");
-      if (model.id === "worker") {
+      const directorySession = request.messages.some(
+        (message) =>
+          message.role === "system" &&
+          Object.values(message.sections ?? {}).some((text) =>
+            text?.includes("directory-owning coding agent"),
+          ),
+      );
+      if (model.id === "worker" && !directorySession) {
         if (last?.role === "toolResult") return fauxAssistantMessage("Faux worker result: done.");
         return fauxAssistantMessage(
           [fauxToolCall("post_update", { text: "Faux worker progress: checking." })],

@@ -151,7 +151,8 @@ async function isFront(
   context: Context,
 ): Promise<boolean> {
   const roots = await read.snapshot(RootsDoc, context);
-  return roots !== undefined && rootRecord(roots, id) !== undefined;
+  const record = roots === undefined ? undefined : rootRecord(roots, id);
+  return record !== undefined && record.directory === undefined;
 }
 
 /**

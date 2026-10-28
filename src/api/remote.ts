@@ -23,6 +23,7 @@ import {
 } from "./attachments.ts";
 import { randomId } from "./ids.ts";
 import type { Client, LoginEntry, RootClient, RootSummary, Watched } from "./client.ts";
+import type { NewSession } from "./directories.ts";
 import {
   Conversation,
   Root,
@@ -462,6 +463,30 @@ export class RemoteClient implements Client {
   }
   createRoot(requestId: string) {
     return this.run(() => this.session.ref.createRoot({ requestId }));
+  }
+  browseFolders(path: string, base?: string, query?: string) {
+    return this.run(() =>
+      this.session.ref.browseFolders({
+        path,
+        ...(base === undefined ? {} : { base }),
+        ...(query === undefined ? {} : { query }),
+      }),
+    );
+  }
+  discoverDirectories(path: string) {
+    return this.run(() => this.session.ref.discoverDirectories({ path }));
+  }
+  createSession(input: NewSession, requestId: string) {
+    return this.run(() => this.session.ref.createSession({ input, requestId }));
+  }
+  assignDirectory(id: string, input: NewSession) {
+    return this.run(() => this.session.ref.assignDirectory({ root: id, input }));
+  }
+  listDirectory(id: string, path: string) {
+    return this.run(() => this.session.ref.listDirectory({ root: id, path }));
+  }
+  readDirectoryFile(id: string, path: string) {
+    return this.run(() => this.session.ref.readDirectoryFile({ root: id, path }));
   }
   renameRoot(id: string, label: string) {
     return this.run(() => this.session.ref.renameRoot({ root: id, label }));

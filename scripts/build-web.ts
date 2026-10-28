@@ -15,7 +15,7 @@ const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SOURCE = join(ROOT, "src", "web");
 const OUT = join(ROOT, "dist", "web");
 const PLUGINS = join(ROOT, "src", "plugins");
-/** Every page module together: they load after first paint, outside the script's budget. */
+/** On-demand UI and plugin modules together, outside the startup script's budget. */
 const PAGES_BUDGET_GZIP_BYTES = 8 * 1024;
 /**
  * Chord's client host brings its whole runtime and TypeBox (about 80 KB gzip of the ~110); the rest is the app. The
@@ -30,6 +30,7 @@ const result = await build({
   bundle: true,
   minify: true,
   format: "esm",
+  splitting: true,
   platform: "browser",
   target: "es2022",
   jsx: "automatic",
@@ -41,6 +42,17 @@ const result = await build({
   logLevel: "warning",
 });
 const outputs = Object.keys(result.metafile.outputs).map((path) => basename(path));
+const initial = new Set<string>();
+const pending = Object.keys(result.metafile.outputs).filter((path) =>
+  /^app\..+\.js$/.test(basename(path)),
+);
+while (pending.length) {
+  const path = pending.pop();
+  if (path === undefined || initial.has(path)) continue;
+  initial.add(path);
+  for (const item of result.metafile.outputs[path]?.imports ?? [])
+    if (!item.external && item.kind !== "dynamic-import") pending.push(item.path);
+}
 const js = outputs.find((name) => /^app\..+\.js$/.test(name));
 const css = outputs.find((name) => /^style\..+\.css$/.test(name));
 if (js === undefined || css === undefined)
@@ -79,7 +91,7 @@ await writeFile(join(OUT, "pages.json"), `${JSON.stringify(pages)}\n`);
 // The manifest is the server's, named per device, so the offline shell never keeps a stale one.
 const shell = [
   "/",
-  `/${js}`,
+  ...outputs.filter((file) => file.endsWith(".js")).map((file) => `/${file}`),
   `/${css}`,
   "/icon.svg",
   ...Object.values(pages).map((file) => `/${file}`),
@@ -99,20 +111,23 @@ await build({
   },
   logLevel: "warning",
 });
-const gzip = gzipSync(await readFile(join(OUT, js))).length;
+let gzip = 0;
+for (const path of initial) gzip += gzipSync(await readFile(path)).length;
 const cssGzip = gzipSync(await readFile(join(OUT, css))).length;
 console.log(
-  `web · ${js} ${(gzip / 1024).toFixed(1)} KB gzip · ${css} ${(cssGzip / 1024).toFixed(1)} KB gzip`,
+  `web · startup ${gzip} bytes gzip (${(gzip / 1024).toFixed(1)} KB) · ${css} ${(cssGzip / 1024).toFixed(1)} KB gzip`,
 );
 if (gzip > BUDGET_GZIP_BYTES)
   throw new Error(`The web client is ${gzip} bytes gzipped, over its ${BUDGET_GZIP_BYTES} budget`);
 let pagesGzip = 0;
-for (const file of Object.values(pages))
+for (const file of [
+  ...Object.values(pages),
+  ...Object.keys(result.metafile.outputs)
+    .filter((path) => path.endsWith(".js") && !initial.has(path))
+    .map((path) => basename(path)),
+])
   pagesGzip += gzipSync(await readFile(join(OUT, file))).length;
-if (Object.keys(pages).length > 0)
-  console.log(
-    `web · page modules ${Object.keys(pages).join(", ")} ${(pagesGzip / 1024).toFixed(1)} KB gzip`,
-  );
+if (pagesGzip > 0) console.log(`web · on-demand modules ${(pagesGzip / 1024).toFixed(1)} KB gzip`);
 if (pagesGzip > PAGES_BUDGET_GZIP_BYTES)
   throw new Error(
     `The page modules are ${pagesGzip} bytes gzipped, over their ${PAGES_BUDGET_GZIP_BYTES} budget`,

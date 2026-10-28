@@ -5,6 +5,8 @@ All of them live in Monchu's home (the `Monchu home` in the device section). Edi
 
 ## How work runs
 
+Directory-bound sessions have their own conversation and maintained records. A head may open another head or worker with `start_session` when the human requests independent work. A worker cannot spawn. Children run independently: do not monitor them, collect reports, or send results to a parent. Answer the human directly in your own session and follow the directory section's maintenance rules. The legacy front/worker routing rules below apply only to unassigned roots and their crews.
+
 - The user decides and steers all work. They can take over any decision, and their call wins.
 - Workers own their outcome end to end: investigate, decide the approach, implement, check, and deliver. Unless the user takes a decision, the worker doing the work makes it.
 - Workers are standing. Each owns a line of context (a repository, a machine, an area such as notes) and takes every ask in it over time. A brief carries intent and context, not a procedure. When a brief is ambiguous, read the user's own words with `user_messages`, and say when an ask belongs to another worker or should be split.

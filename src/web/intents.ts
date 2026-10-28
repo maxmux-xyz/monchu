@@ -7,14 +7,14 @@
 import { batch } from "@preact/signals";
 import type { AuthEvent, AuthPrompt } from "@earendil-works/pi-ai";
 import type { Attachment } from "../api/attachments.ts";
-import type { ModelPick, PinnedMessage, QueueChange } from "../api/client.ts";
+import type { PinnedMessage, QueueChange } from "../api/client.ts";
 import { parseWorkerNotice, type WhenBusy } from "../api/notices.ts";
 import { randomId } from "../api/ids.ts";
 import { formatReports } from "../api/reports.ts";
 import { helpText, loginProviders, parseInput } from "../ui/commands.ts";
 import { formatRecord, logQuery } from "../ui/logs.ts";
-import { LOGIN_FAILED, loginHints, pickTargets } from "../ui/login.ts";
-import { parseRootsCommand, rootLabel, type RootsCommand } from "../ui/roots.ts";
+import { LOGIN_FAILED, loginHints } from "../ui/login.ts";
+import { parseRootsCommand, type RootsCommand } from "../ui/roots.ts";
 import { age, presentation, type QueuedItem } from "../ui/state.ts";
 import {
   clearPending,
@@ -48,6 +48,7 @@ import {
   prompted,
   promptDrafts,
   rootId,
+  directoriesShown,
   roots,
   sheet,
   openSheet,
@@ -124,15 +125,12 @@ function carriesFiles(text: string): boolean {
   }
 }
 
-/** Show another root from the roots menu or a command, saying which one it is. */
+/** Show another root from the session tree, roots menu, or a command. */
 export async function switchRoot(id: string): Promise<void> {
+  directoriesShown.value = false;
   if (sheet.value?.kind === "roots") closeSheet();
   if (id === rootId.value) return;
   await openRoot(id, true);
-  const summary = roots.value.find((each) => each.id === id);
-  // Said in the root it names, unless another was shown meanwhile.
-  if (rootId.value === id)
-    notice(`root · ${id}${summary === undefined ? "" : ` · ${rootLabel(summary)}`}`);
 }
 
 /** Open or close every card, including the ones opened or closed by hand. */
@@ -450,48 +448,16 @@ async function runMcp(text: string): Promise<void> {
   }
 }
 
-/** `/model` and `/thinking`: first what to change, as the terminal asks, then the pick; Shift+Enter or the toggle saves a role default. */
+/** `/model` and `/thinking` change only the shown session. */
 async function runModel(thinking: boolean, search: string): Promise<void> {
   const at = showing();
-  await at.refreshWorkers();
-  // Each pick opens only while the root it is about is still shown.
+  const worker = at.shown.value;
+  const name = worker ?? "this session";
+  const current = await at.root.modelChoice(worker);
   if (!at.open) return;
-  const targets = pickTargets(
-    at.shown.value,
-    at.workers.value.map((worker) => worker.name),
-  );
-  const which = await pick(
-    thinking ? "Pick the thinking level of" : "Pick the model of",
-    // The terminal's Ctrl+S is Shift+Enter or the toggle under the next list here.
-    targets.map(({ label, target, description }) => ({
-      id: label,
-      label,
-      detail:
-        target.kind === "conversation" ? "this conversation, or its role default" : description,
-    })),
-  );
-  const target = targets.find((each) => each.label === which?.id)?.target;
-  if (target === undefined) return;
-  const name = target.kind === "default" ? `${target.role} default` : (target.name ?? "root");
-  const current =
-    target.kind === "default"
-      ? await client().roleChoice(target.role)
-      : await at.root.modelChoice(target.name);
-  if (!at.open) return;
-  // A role default saves on Enter, so it has no separate save.
-  const role = target.kind === "conversation" && target.name !== undefined ? "worker" : "front";
-  const alternate = target.kind === "conversation" ? `save as ${role} default` : undefined;
-  const apply = async (change: ModelPick, save: boolean, value: string) => {
-    if (target.kind === "default") {
-      await client().saveDefault(target.role, change);
-      return at.notice(`${name} ${value} · saved`);
-    }
-    await at.root.pickModel(change, save, target.name);
-    at.notice(`${name} ${value} · ${save ? `saved as ${role} default` : "this conversation only"}`);
-  };
   if (thinking) {
     const picked = await pick(
-      `Thinking level · ${name} (now ${current.thinkingLevel}, default ${current.defaults.thinkingLevel})`,
+      `Thinking level · ${name} (now ${current.thinkingLevel})`,
       current.thinkingLevels.map((level) => ({
         id: level,
         label: level,
@@ -504,11 +470,11 @@ async function runModel(thinking: boolean, search: string): Promise<void> {
             : []),
         ],
       })),
-      alternate,
     );
     const level = current.thinkingLevels.find((each) => each === picked?.id);
     if (picked === undefined || level === undefined) return;
-    return apply({ thinkingLevel: level }, picked.alternate, `thinking · ${level}`);
+    await at.root.pickModel({ thinkingLevel: level }, false, worker);
+    return at.notice(`${name} thinking · ${level} · this conversation only`);
   }
   if (current.models.length === 0)
     return at.notice("no models with credentials yet · /login first", "warning");
@@ -541,16 +507,17 @@ async function runModel(thinking: boolean, search: string): Promise<void> {
           : []),
       ],
     })),
-    alternate,
+    undefined,
     search.trim(),
   );
   const model = models.find((each) => key(each.provider, each.id) === picked?.id);
   if (picked === undefined || model === undefined) return;
-  await apply(
+  await at.root.pickModel(
     { model: { provider: model.provider, modelId: model.id } },
-    picked.alternate,
-    `model · ${picked.id}`,
+    false,
+    worker,
   );
+  at.notice(`${name} model · ${picked.id} · this conversation only`);
 }
 
 /** A root action from the roots menu: the list shows what it did, a refusal (a working root) shows as a warning. */
@@ -616,7 +583,7 @@ export function toggleRoots(open = sheet.value?.kind !== "roots"): void {
   else closeSheet();
 }
 
-/** Open the pins menu (newest pinned first) or close it: the star in the filter bar. */
+/** Open the pins menu (newest pinned first) or close it. */
 export function togglePins(open = sheet.value?.kind !== "pins"): void {
   if (open) openSheet("pins");
   else closeSheet();
@@ -805,7 +772,8 @@ async function runInput(
         input.command === "skill" ? await client().skillInput(input.name, input.text) : input.text;
       if (name === undefined) await at.root.submit(text, requestId, when, attachments);
       else await at.root.messageWorker(name, text, requestId, when, attachments);
-      at.notice(`received · ${name ?? "root"}`);
+      if (roots.value.find((root) => root.id === at.id)?.directory === undefined)
+        at.notice(`received · ${name ?? "root"}`);
       return true;
     }
     case "/attach": {

@@ -12,6 +12,8 @@ import { Goals } from "./agents/goals.ts";
 import { createMemory } from "./agents/memory.ts";
 import { Roots } from "./agents/roots.ts";
 import { createWorkerTools } from "./agents/workers.ts";
+import { createSessions } from "./agents/sessions.ts";
+import { Directories } from "./directories.ts";
 import { BUILD, BuildHost, Builds, RELOAD_TOOLS, type Build, type BuildInputs } from "./build.ts";
 import { createContext } from "./context.ts";
 import { createHomeCheck } from "./home-check.ts";
@@ -33,6 +35,8 @@ async function build(inputs: BuildInputs): Promise<Build> {
   const context = createContext(inputs.home, config.settings, loaded.skills);
   const tools = createPiTools(context.settings, inputs.finders, inputs.vault);
   const memory = createMemory(inputs.home);
+  const root = [Goals, memory, Roots, Inbox];
+  const sessions = (preload: readonly string[]) => createSessions(inputs.config, root, preload);
   const identity = createIdentity(inputs.home, inputs.reportSkipped, inputs.observeBudget);
   // An mcp.json or mcp.local.json that isn't JSON must not keep the device from opening: no server loads.
   const mcpConfig = await loadMcpConfig(inputs.home).catch((error: unknown) => {
@@ -60,6 +64,8 @@ async function build(inputs: BuildInputs): Promise<Build> {
     Codemode,
     Goals,
     Inbox,
+    Directories,
+    sessions([]),
   ];
   const own = [...core, memory, identity, mcp.extension, secrets];
   const plugins = loaded.use({
@@ -92,6 +98,8 @@ async function build(inputs: BuildInputs): Promise<Build> {
     secrets,
     // After the secrets, so the inbox tool joins the end of each root's list.
     Inbox,
+    Directories,
+    sessions(search.preload),
     ...search.groups,
     createPluginSections(plugins.sections),
     ...plugins.attached,
@@ -99,7 +107,7 @@ async function build(inputs: BuildInputs): Promise<Build> {
   inputs.validate(extensions);
   return {
     extensions,
-    root: [Goals, memory, Roots, Inbox],
+    root,
     groups: search.groups,
     preload: search.preload,
     claude: search.claude,

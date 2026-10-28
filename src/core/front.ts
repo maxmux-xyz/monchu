@@ -56,6 +56,7 @@ import {
 } from "./agents/workers.ts";
 import { thinkingLevels, type ModelRole } from "./config.ts";
 import { FRONT_INSTRUCTIONS } from "./identity.ts";
+import { SESSION_INSTRUCTIONS } from "./agents/sessions.ts";
 import { findItem, InboxItemsDoc, type InboxItem } from "./inbox.ts";
 import { ClientNoticesDoc, setStatus } from "./plugin-shapes.ts";
 import type { Extensions } from "./reload.ts";
@@ -114,12 +115,18 @@ export async function prepareFront(
     .filter((extension) => names.includes(extension.name))
     .sort((left, right) => names.indexOf(left.name) - names.indexOf(right.name));
   const added = extensions.attached.filter((extension) => !names.includes(extension.name));
+  const directory = rootRecord(await tx.doc(RootsDoc), id)?.directory;
   await configure(tx, id, {
     // Goals, memory and roots are not in the host default. Workers get them too: a new worker copies this agent.
     extensions: { add: [...extensions.root, ...kept, ...added] },
-    instructions: FRONT_INSTRUCTIONS,
+    instructions: directory === undefined ? FRONT_INSTRUCTIONS : SESSION_INSTRUCTIONS,
   });
-  await applyFrontRole(tx, id, extensions.config.front, extensions.preload);
+  await applyFrontRole(
+    tx,
+    id,
+    directory?.agentRole === "worker" ? extensions.config.worker : extensions.config.front,
+    extensions.preload,
+  );
 }
 
 /** Apply the configured front role from the next request, keeping the fields picked for this root only. */
@@ -299,15 +306,27 @@ export class Front implements RootClient {
     );
     // Plugins see the text first, with the front's context as it was before it; one may change or take it.
     let messages: ReturnType<InputEvent["messages"]> | undefined;
-    const seen = await this.host.extensions.plugin.front.input(
-      {
-        text: message,
-        source: "interactive",
-        streamingBehavior: whenBusy,
-        messages: () => (messages ??= front.context(context).then((view) => view.messages)),
-      },
-      front.id,
-    );
+    const directory = (await this.host.harness.snapshot(RootsDoc, context))?.roots.find(
+      (item) => item.id === front.id,
+    )?.directory;
+    const openAsks =
+      directory === undefined
+        ? []
+        : ((await this.host.harness.snapshot(InboxItemsDoc, front.id, context))?.items ?? [])
+            .filter((item) => item.kind === "ask" && item.state === "open")
+            .map((item) => item.entry);
+    const seen =
+      directory !== undefined
+        ? { text: message, admitted: [] }
+        : await this.host.extensions.plugin.front.input(
+            {
+              text: message,
+              source: "interactive",
+              streamingBehavior: whenBusy,
+              messages: () => (messages ??= front.context(context).then((view) => view.messages)),
+            },
+            front.id,
+          );
     if (seen.text === undefined) return;
     const input = await attachedInput(
       this.host.home,
@@ -319,6 +338,11 @@ export class Front implements RootClient {
       { type: "input", content: input.content, requestId, whenBusy },
       context,
     );
+    if (openAsks.length)
+      await front.commit(async (tx) => {
+        for (const item of (await tx.doc(InboxItemsDoc, front.id)).items)
+          if (openAsks.includes(item.entry) && item.state === "open") item.state = "answered";
+      }, context);
     // Each in its own commit: one plugin's failure, which it reports, never undoes another's.
     for (const run of seen.admitted)
       await front.commit((tx) => run(tx, submission.id), context).catch(() => {});
@@ -712,6 +736,7 @@ export class Front implements RootClient {
   async modelChoice(workerName?: string): Promise<ModelChoice> {
     const agent = await (await this.target(workerName)).agent(context);
     const { models, extensions } = this.host;
+    const role = await this.modelRole(workerName);
     const model =
       agent.model === undefined
         ? undefined
@@ -720,7 +745,7 @@ export class Front implements RootClient {
       model,
       thinkingLevel: agent.thinkingLevel,
       thinkingLevels: model === undefined ? thinkingLevels : getSupportedThinkingLevels(model),
-      defaults: workerName === undefined ? extensions.config.front : extensions.config.worker,
+      defaults: extensions.config[role],
       models: await models.getAvailable(),
     };
   }
@@ -732,8 +757,7 @@ export class Front implements RootClient {
   async pickModel(pick: ModelPick, saveDefault: boolean, workerName?: string): Promise<void> {
     this.host.checkPick(pick);
     const conversation = await this.target(workerName);
-    if (saveDefault)
-      await this.host.saveDefault(workerName === undefined ? "front" : "worker", pick);
+    if (saveDefault) await this.host.saveDefault(await this.modelRole(workerName), pick);
     await conversation.commit(async (tx) => {
       if (workerName === undefined)
         (await tx.doc(FrontPicks, conversation.id))["model" in pick ? "model" : "thinkingLevel"] =
@@ -743,8 +767,26 @@ export class Front implements RootClient {
     }, context);
   }
 
+  private async modelRole(workerName?: string): Promise<"front" | "worker"> {
+    if (workerName !== undefined) return "worker";
+    const front = await this.conversation();
+    const roots = await this.host.harness.snapshot(RootsDoc, context);
+    return roots !== undefined && rootRecord(roots, front.id)?.directory?.agentRole === "worker"
+      ? "worker"
+      : "front";
+  }
+
   async changeDirectory(path: string, workerName?: string): Promise<string> {
     const front = await this.conversation();
+    if (
+      workerName === undefined &&
+      (await this.host.harness.snapshot(RootsDoc, context))?.roots.find(
+        (item) => item.id === front.id,
+      )?.directory !== undefined
+    )
+      throw new Error(
+        "This session is bound to its source checkout; open a new session to use a different checkout",
+      );
     const conversation = await this.target(workerName);
     const agent = await conversation.agent(context);
     const cwd = await resolveDirectory(path, agent.cwd ?? this.host.home);

@@ -97,6 +97,8 @@ export type Ask = {
 export const MCP_CALLBACK = "/mcp/callback";
 
 /** The page's state that isn't any one root's. Only this module and the page's intents write it. */
+export const directoriesShown = signal(false);
+
 export const page = {
   /** The link to the core, as the status bar's dot shows it; a drop and its redial never write to the transcript. */
   connection: signal<Connection | "connecting">("connecting"),
@@ -400,6 +402,11 @@ async function initialRoot(connected: Client): Promise<string> {
  */
 export async function openRoot(id: string, push = false): Promise<void> {
   const connected = client();
+  const previous = here.peek()?.id;
+  if (previous !== undefined && previous !== id) {
+    sessionStorage.setItem(`draft:${previous}`, page.draft.peek());
+    page.draft.value = sessionStorage.getItem(`draft:${id}`) ?? "";
+  }
   here.value?.close();
   const at = new Showing(id, connected.root(id), (text, kind) => rootNotice(text, kind, id));
   // A pick or question the person opened belongs to the root they left; the core's (a login) belongs to the connection.

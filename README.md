@@ -25,6 +25,16 @@ To update, type `/update` in Monchu (or `/update <version>` for a [tagged releas
 
 [docs/setup.md](docs/setup.md) covers logins, configuration, MCP servers, and running on several devices; [docs/plugins.md](docs/plugins.md) how to add your own tools and hooks as private plugins. [docs/internals.md](docs/internals.md) covers how Monchu works. `/help` lists the commands.
 
+## Directory agents
+
+The desktop web client has a live session tree, chat, and an owned-directory file preview. The header shows the selected session's repository. Use **+ Open** to open an existing work directory with `instruction.md`, choosing its repository, directory type, and head or worker role. Use **Browse** beside a path to navigate folders on the machine running Monchu, search the current folder by name, then **Use this folder** to fill it. The directory instructions supply the assignment; the source checkout is optional under Advanced. Existing conversations stay intact and can be assigned a directory explicitly when their legacy workers and jobs have been closed.
+
+Directory types are currently fixed: `task`, `product`, `design`, `experimental`, `data-science`, `recurring`, and `recruiting`. Each supplies maintenance rules. Opening a session reads existing instructions and leaves directory files untouched. Create new work through chat using the applicable task skill. Task planning leaves `progress.md` empty; product trackers have no catch-all progress file. A recurring directory does not schedule a job.
+
+**Directories** scans a folder you choose for directories containing `instruction.md`, including ones with no agent. Select a row to resume its live agent or open a new session. The last browsed folder stays in this browser. Hidden folders, `node_modules`, and symlink folders are excluded; a partial scan is labeled and asks for a narrower folder.
+
+Ask a head in chat to open independent work. Its `start_session` tool opens another normal conversation beneath it in the tree. Heads can create heads or workers; workers cannot spawn. The tree records provenance: children have their own lifetime, and parents receive no automatic reports or completion notifications. Each live session owns a distinct record directory; task and experimental sessions also need distinct source checkouts. File previews are read-only, restricted to the owned directory, and limited to 256 KiB of UTF-8 text.
+
 ## Development
 
 You need npm 12.2+ and [mise](https://mise.jdx.dev).

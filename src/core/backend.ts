@@ -14,6 +14,7 @@ import {
 import {
   configure,
   Harness,
+  LiveDoc,
   type CommitPublication,
   type ConversationId,
   type EntryId,
@@ -36,6 +37,15 @@ import type {
 } from "../api/client.ts";
 import type { Principal } from "../api/contract.ts";
 import { shortId } from "../api/ids.ts";
+import type { NewSession } from "../api/directories.ts";
+import { checkDirectoryOwner, createSession as createDirectorySession } from "./agents/sessions.ts";
+import {
+  listDirectory,
+  browseFolders,
+  discoverDirectories,
+  readDirectoryFile,
+  resolveSession,
+} from "./directories.ts";
 import { parseRelease, type Release } from "../api/release.ts";
 import { systemNoticeText } from "../api/notices.ts";
 import type { LogAttributes, LogQuery, LogRecord } from "../api/logs.ts";
@@ -537,7 +547,7 @@ export class Monchu implements Client {
     await this.harness.commit(async (tx) => {
       for (const item of await noteReplies(tx, id)) {
         const entry = item.kind === undefined ? await tx.entry(item.entry) : undefined;
-        if (entry !== undefined)
+        if (entry !== undefined && rootRecord(await tx.doc(RootsDoc), id)?.directory === undefined)
           await this.extensions.plugin.front.reply(
             { entry: item.entry, text: replyText(entry), headline: item.headline },
             tx,
@@ -635,10 +645,15 @@ export class Monchu implements Client {
   }
 
   /** Applies a front role to every root from its next request, keeping each root's own picks. */
-  private async applyFrontRoles(role: ModelRole): Promise<void> {
+  private async applyFrontRoles(front: ModelRole, worker: ModelRole): Promise<void> {
     await this.harness.commit(async (tx) => {
       for (const root of (await tx.doc(RootsDoc)).roots)
-        await applyFrontRole(tx, root.id, role, this.extensions.preload);
+        await applyFrontRole(
+          tx,
+          root.id,
+          root.directory?.agentRole === "worker" ? worker : front,
+          this.extensions.preload,
+        );
     }, context);
   }
 
@@ -754,6 +769,97 @@ export class Monchu implements Client {
     return shortId(id);
   }
 
+  async createSession(input: NewSession, requestId: string): Promise<string> {
+    if (this.closing !== undefined) throw new Error("Monchu is closing");
+    const resolved = await resolveSession(input, this.home);
+    const id = await this.harness.commit(
+      (tx) =>
+        createDirectorySession(
+          tx,
+          resolved,
+          requestId,
+          this.extensions.config,
+          this.extensions.root,
+          this.extensions.preload,
+        ),
+      context,
+    );
+    this.harness.resume();
+    return shortId(id);
+  }
+
+  async assignDirectory(id: string, input: NewSession): Promise<void> {
+    const record = findRoot(await this.records(), id);
+    const resolved = await resolveSession(input, this.home);
+    if (
+      record.directory === undefined &&
+      (await this.harness.snapshot(LiveDoc, record.id, context))?.run !== undefined
+    )
+      throw new Error("Finish or stop this session before assigning its directory");
+    await this.harness.commit(async (tx) => {
+      const state = await tx.doc(RootsDoc);
+      const current = findRoot(state.roots, id);
+      if (current.directory !== undefined) {
+        const bound = current.directory;
+        if (
+          bound.ownedDirectory === resolved.ownedDirectory &&
+          bound.repoPath === resolved.repoPath &&
+          bound.codeDirectory === resolved.codeDirectory &&
+          bound.directoryType === resolved.directoryType &&
+          bound.agentRole === resolved.agentRole
+        )
+          return;
+        throw new Error("This session already owns a directory");
+      }
+      const live = await tx.doc(LiveDoc, current.id);
+      if (live.run !== undefined) throw new Error("Finish or stop this session first");
+      const crew = await tx.doc(WorkersDoc, current.id);
+      if (crew.workers.some((worker) => !worker.closed) || crew.deliveries.length > 0)
+        throw new Error("Close this session's legacy workers before assigning a directory");
+      if (
+        (await tx.doc(JobsDoc)).jobs.some(
+          (job) => job.rootId === current.id && job.status !== "done",
+        )
+      )
+        throw new Error("Remove this session's legacy jobs before assigning a directory");
+      checkDirectoryOwner(state.roots, resolved);
+      current.directory = {
+        repoPath: resolved.repoPath,
+        codeDirectory: resolved.codeDirectory,
+        ownedDirectory: resolved.ownedDirectory,
+        directoryType: resolved.directoryType,
+        agentRole: resolved.agentRole,
+      };
+      current.label = resolved.name;
+      current.named = true;
+      await configure(tx, current.id, { cwd: resolved.codeDirectory });
+      await prepareFront(tx, current.id, this.extensions);
+    }, context);
+  }
+
+  browseFolders(path: string, base?: string, query?: string) {
+    return browseFolders(path, this.home, base, query);
+  }
+
+  discoverDirectories(path: string) {
+    return discoverDirectories(path, this.home);
+  }
+
+  private async ownedDirectory(id: string): Promise<string> {
+    const record = findRoot(await this.records(), id);
+    if (record.directory === undefined)
+      throw new Error("Assign an owned directory to this session first");
+    return record.directory.ownedDirectory;
+  }
+
+  async listDirectory(id: string, path: string) {
+    return listDirectory(await this.ownedDirectory(id), path);
+  }
+
+  async readDirectoryFile(id: string, path: string) {
+    return readDirectoryFile(await this.ownedDirectory(id), path);
+  }
+
   /** Names a root; an empty label names it again from its next message. */
   async renameRoot(id: string, label: string): Promise<void> {
     const text = label.replace(/\s+/g, " ").trim();
@@ -788,10 +894,18 @@ export class Monchu implements Client {
         );
     }
     await this.harness.commit(async (tx) => {
-      const root = rootRecord(await tx.doc(RootsDoc), record.id);
+      const state = await tx.doc(RootsDoc);
+      const root = rootRecord(state, record.id);
       if (root === undefined) return;
       if (archived) root.archived = true;
-      else delete root.archived;
+      else {
+        if (root.directory !== undefined)
+          checkDirectoryOwner(
+            state.roots.filter((item) => item.id !== root.id),
+            root.directory,
+          );
+        delete root.archived;
+      }
     }, context);
   }
 
@@ -976,7 +1090,10 @@ export class Monchu implements Client {
           );
       },
     );
-    if (role === "front") await this.applyFrontRoles(saved);
+    await this.applyFrontRoles(
+      role === "front" ? saved : this.extensions.config.front,
+      role === "worker" ? saved : this.extensions.config.worker,
+    );
   }
 
   /** Concurrent requests share one reload. No registry or settings changes survive a failed preparation. */
@@ -986,7 +1103,7 @@ export class Monchu implements Client {
     this.reloading ??= this.extensions
       .reload(async (config) => {
         // Durable captures model and stream options during request preparation; later phases resolve current policy.
-        await this.applyFrontRoles(config.front);
+        await this.applyFrontRoles(config.front, config.worker);
       })
       .then(async (modules) => {
         // The new build's groups: a server whose preload was just turned on reaches existing conversations now.
@@ -1440,6 +1557,7 @@ function touchesRoots(publication: CommitPublication): boolean {
   return publication.changes.some(
     (change) =>
       (change.type === "document" && SUMMARY_KINDS.has(change.record.kind)) ||
+      (change.type === "task" && change.value.kind === "monchu.session-kickoff") ||
       (change.type === "entry" && change.value.kind === "pi.assistant"),
   );
 }

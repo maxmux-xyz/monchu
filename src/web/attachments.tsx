@@ -1,11 +1,10 @@
 /**
- * Files for the next message: the attach button, the paste key, a paste anywhere on the page and a drop add them, each
+ * Files for the next message: /attach, a paste anywhere on the page, and a drop add them, each
  * uploads at once, and the tray shows them (images as previews) until a message takes them, uploaded or not; the message's
  * row over the editor counts them while it goes. A sent message shows its images and files under its text.
  */
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { signal, useSignal } from "@preact/signals";
-import { useRef } from "preact/hooks";
 import {
   ATTACHMENT_MAX_BYTES,
   ATTACHMENTS_PER_MESSAGE,
@@ -143,93 +142,27 @@ export function addFiles(
   }
 }
 
-/** Whether the page may read the clipboard: a secure page in a browser that has `read`. */
-const canReadClipboard = (): boolean =>
-  "clipboard" in navigator && typeof navigator.clipboard.read === "function";
-
-/**
- * Ctrl+V for a touch screen, whose keyboard can't put an image in a text box: the clipboard's images attach, else its
- * text goes to `text`. Fails when the browser refuses or the clipboard holds neither.
- */
-async function pasteClipboard(
-  onFiles: (files: File[]) => void,
-  onText: (text: string) => void,
-): Promise<void> {
-  const images: File[] = [];
-  let text = "";
-  for (const item of await navigator.clipboard.read()) {
-    const type = item.types.find((each) => each.startsWith("image/"));
-    if (type !== undefined)
-      images.push(new File([await item.getType(type)], imageFileName(type), { type }));
-    else if (!text && item.types.includes("text/plain"))
-      text = await (await item.getType("text/plain")).text();
-  }
-  if (images.length > 0) onFiles(images);
-  else if (text) onText(text);
-  else throw new Error("nothing to paste");
-}
-
 /** Opens the file picker, as `/attach` does. */
 export function openPicker(): void {
   picker?.click();
 }
 
-/** The attach button and its hidden file input; any file type, several at once. */
-export function AttachButton(props: { onFiles: (files: File[]) => void }) {
-  const input = useRef<HTMLInputElement>(null);
+/** File selection invoked from chat with /attach. */
+export function FileInput(props: { onFiles: (files: File[]) => void }) {
   return (
-    <>
-      <button
-        type="button"
-        class="attach-button icon"
-        title="attach files or images (or paste, or drop)"
-        aria-label="attach files"
-        onClick={() => input.current?.click()}
-      >
-        +
-      </button>
-      <input
-        ref={(element) => {
-          input.current = element;
-          picker = element;
-        }}
-        type="file"
-        multiple
-        hidden
-        onChange={(event) => {
-          const files = [...(event.currentTarget.files ?? [])];
-          // Picking the same file again must fire again.
-          event.currentTarget.value = "";
-          props.onFiles(files);
-        }}
-      />
-    </>
-  );
-}
-
-/** The paste key, where the page may read the clipboard: Ctrl+V for a touch keyboard, which can't paste an image here. */
-export function PasteButton(props: {
-  onFiles: (files: File[]) => void;
-  onText: (text: string) => void;
-  onError: (message: string) => void;
-}) {
-  if (!canReadClipboard()) return null;
-  return (
-    <button
-      type="button"
-      class="icon"
-      title="paste an image or text from the clipboard (Ctrl+V)"
-      aria-label="paste"
-      // A tap must not take focus from the editor, or the keyboard closes.
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={() =>
-        void pasteClipboard(props.onFiles, props.onText).catch((error: unknown) =>
-          props.onError(error instanceof Error ? error.message : String(error)),
-        )
-      }
-    >
-      ❐
-    </button>
+    <input
+      ref={(element) => {
+        picker = element;
+      }}
+      type="file"
+      multiple
+      hidden
+      onChange={(event) => {
+        const files = [...(event.currentTarget.files ?? [])];
+        event.currentTarget.value = "";
+        props.onFiles(files);
+      }}
+    />
   );
 }
 

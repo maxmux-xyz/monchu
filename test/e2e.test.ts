@@ -15,7 +15,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Draft, JobEvent, PinnedMessage, RootClient } from "../src/api/client.ts";
+import type { Draft, JobEvent, PinnedMessage, RootClient, RootSummary } from "../src/api/client.ts";
 import { shortId } from "../src/api/ids.ts";
 import type { RemoteClient } from "../src/api/remote.ts";
 import { Monchu } from "../src/core/backend.ts";
@@ -411,6 +411,245 @@ describe("Monchu end to end", { timeout: 120_000 }, () => {
     );
     expect((await monchu.client.jobs()).listing).toContain("e2e-bg");
     expect(await ok("job", { action: "output", name: "e2e-bg" })).toContain("job-done");
+  });
+
+  it("runs directory sessions independently, refuses worker spawning, and bounds remote file access across restart", async () => {
+    const repoPath = join(monchu.home, "coding-repo");
+    await mkdir(repoPath);
+    const headInput = {
+      name: "Product owner",
+      brief: "Plan the product.",
+      agentRole: "head" as const,
+      directoryType: "product" as const,
+      repoPath,
+      codeDirectory: repoPath,
+      ownedDirectory: join(repoPath, "product"),
+    };
+    await mkdir(headInput.ownedDirectory);
+    await writeFile(
+      join(headInput.ownedDirectory, "instruction.md"),
+      "# Product owner\nPlan the product.\n",
+    );
+    const unopened = join(repoPath, "design", "future");
+    await mkdir(unopened, { recursive: true });
+    await writeFile(
+      join(unopened, "instruction.md"),
+      "# Future design\nExisting design instructions.\n",
+    );
+    expect(await monchu.client.browseFolders(repoPath)).toMatchObject({
+      path: repoPath,
+      folders: ["design", "product"],
+      more: false,
+    });
+    expect(await monchu.client.browseFolders("design", repoPath)).toMatchObject({
+      path: join(repoPath, "design"),
+      parent: repoPath,
+      folders: ["future"],
+    });
+    await expect(
+      monchu.client.browseFolders(join(headInput.ownedDirectory, "instruction.md")),
+    ).rejects.toThrow("Not a directory");
+    const searchRoot = join(repoPath, "folders");
+    await mkdir(searchRoot);
+    await Promise.all(
+      Array.from({ length: 200 }, (_, index) => mkdir(join(searchRoot, `folder-${index}`))),
+    );
+    await mkdir(join(searchRoot, "z-target"));
+    expect((await monchu.client.browseFolders(searchRoot)).more).toBe(true);
+    expect(await monchu.client.browseFolders(searchRoot, undefined, "TARGET")).toMatchObject({
+      folders: ["z-target"],
+      more: false,
+    });
+    const catalog = await monchu.client.discoverDirectories(repoPath);
+    expect(catalog.more).toBe(false);
+    expect(catalog.directories).toEqual(
+      expect.arrayContaining([
+        { path: unopened, name: "Future design", directoryType: "design" },
+        { path: headInput.ownedDirectory, name: "Product owner", directoryType: "product" },
+      ]),
+    );
+    await expect(
+      monchu.client.createSession(
+        { ...headInput, ownedDirectory: join(repoPath, "missing") },
+        "e2e:missing-instructions",
+      ),
+    ).rejects.toThrow();
+    const headId = await monchu.client.createSession(headInput, "e2e:directory-head");
+    expect(await monchu.client.createSession(headInput, "e2e:directory-head")).toBe(headId);
+    const head = monchu.client.root(headId);
+    const headView = await head.viewState();
+    let sessions: readonly RootSummary[] = [];
+    const stop = await monchu.client.watchRoots((value) => {
+      sessions = value;
+    });
+    try {
+      await waitFor(
+        () =>
+          headView.value.entries.some((entry) => entry.kind === "pi.assistant") &&
+          sessions.some((item) => item.id === headId && item.status === "idle"),
+        30_000,
+      );
+      expect(
+        (await monchu.client.listDirectory(headId, "")).entries.map((entry) => entry.name),
+      ).toEqual(["instruction.md"]);
+      const childInput = {
+        ...headInput,
+        name: "Implement navigation",
+        brief: "Plan the navigation task.",
+        agentRole: "worker" as const,
+        directoryType: "task" as const,
+        ownedDirectory: join(repoPath, "task"),
+      };
+      await mkdir(childInput.ownedDirectory);
+      await writeFile(
+        join(childInput.ownedDirectory, "instruction.md"),
+        `# Implement navigation\n${childInput.brief}\n`,
+      );
+      await writeFile(join(childInput.ownedDirectory, "plan.md"), "Existing plan.\n");
+      await writeFile(join(childInput.ownedDirectory, "progress.md"), "");
+      await head.submit(
+        `call start_session ${JSON.stringify(childInput)}`,
+        "e2e:spawn-child",
+        "followUp",
+      );
+      await waitFor(
+        () =>
+          sessions.some(
+            (item) => item.spawnedBy === headId && item.directory?.agentRole === "worker",
+          ),
+        30_000,
+      );
+      const child = sessions.find((item) => item.spawnedBy === headId);
+      if (child === undefined) throw new Error("Child did not appear");
+      const childView = await monchu.client.root(child.id).viewState();
+      try {
+        await waitFor(
+          () =>
+            childView.value.entries.some((entry) => entry.kind === "pi.assistant") &&
+            sessions.some((item) => item.id === child.id && item.status === "idle"),
+          30_000,
+        );
+        await waitFor(
+          () =>
+            headView.value.entries
+              .flatMap((entry) => entry.model ?? [])
+              .some((message) => textOf(message) === "Faux tool finished."),
+          30_000,
+        );
+        expect(
+          headView.value.entries
+            .flatMap((entry) => entry.model ?? [])
+            .filter((message) => message.role === "assistant" && textOf(message))
+            .map(textOf),
+        ).toEqual([
+          "Faux reply: Plan the product.. Streaming stays above the editor. DONE",
+          "Faux tool finished.",
+        ]);
+        expect((await monchu.client.readDirectoryFile(child.id, "instruction.md")).text).toContain(
+          childInput.brief,
+        );
+        expect((await monchu.client.readDirectoryFile(child.id, "progress.md")).text).toBe("");
+        await expect(
+          monchu.client.createSession(
+            { ...childInput, name: "Duplicate owner" },
+            "e2e:duplicate-directory",
+          ),
+        ).rejects.toThrow("already has a live session");
+        await expect(
+          monchu.client.createSession(
+            { ...childInput, ownedDirectory: unopened },
+            "e2e:duplicate-checkout",
+          ),
+        ).rejects.toThrow("separate checkout");
+        await writeFile(join(repoPath, "outside.txt"), "not in the work directory");
+        await expect(monchu.client.readDirectoryFile(child.id, "../outside.txt")).rejects.toThrow(
+          "outside",
+        );
+        await expect(
+          monchu.client.readDirectoryFile(child.id, join(repoPath, "outside.txt")),
+        ).rejects.toThrow("relative");
+        const forbidden = {
+          ...childInput,
+          name: "Forbidden child",
+          directoryType: "design",
+          ownedDirectory: join(repoPath, "forbidden"),
+        };
+        await monchu.client
+          .root(child.id)
+          .submit(
+            `call start_session ${JSON.stringify(forbidden)}`,
+            "e2e:worker-spawn",
+            "followUp",
+          );
+        await waitFor(
+          () =>
+            childView.value.entries
+              .flatMap((entry) => entry.model ?? [])
+              .some(
+                (message) =>
+                  message.role === "toolResult" &&
+                  message.toolName === "start_session" &&
+                  message.isError &&
+                  textOf(message).includes("Only a directory-bound head"),
+              ),
+          30_000,
+        );
+        expect(sessions.some((item) => item.label === "Forbidden child")).toBe(false);
+        await monchu.client
+          .root(child.id)
+          .submit(
+            `call codemode ${JSON.stringify({ code: `text(await tools.start_session(${JSON.stringify(forbidden)}));` })}`,
+            "e2e:worker-nested-spawn",
+            "followUp",
+          );
+        await waitFor(
+          () =>
+            childView.value.entries
+              .flatMap((entry) => entry.model ?? [])
+              .filter((message) => message.role === "toolResult" && message.toolName === "codemode")
+              .length > 0,
+          30_000,
+        );
+        expect(sessions.some((item) => item.label === "Forbidden child")).toBe(false);
+        await head.abort();
+        expect((await monchu.client.readDirectoryFile(child.id, "instruction.md")).text).toContain(
+          childInput.brief,
+        );
+        await restart();
+        await waitFor(
+          () => sessions.some((item) => item.id === child.id && item.spawnedBy === headId),
+          30_000,
+        );
+        expect(
+          (await monchu.client.listDirectory(child.id, "")).entries.map((entry) => entry.name),
+        ).toContain("plan.md");
+        const existing = await monchu.client.createRoot("e2e:assign-existing");
+        const assignment = {
+          ...headInput,
+          name: "Design",
+          directoryType: "design" as const,
+          ownedDirectory: join(repoPath, "design", "current"),
+        };
+        await mkdir(assignment.ownedDirectory, { recursive: true });
+        await writeFile(
+          join(assignment.ownedDirectory, "instruction.md"),
+          "# Design\nMaintain this proposal.\n",
+        );
+        await monchu.client.assignDirectory(existing, assignment);
+        await monchu.client.assignDirectory(existing, assignment);
+        expect(
+          (await monchu.client.listDirectory(existing, "")).entries.map((entry) => entry.name),
+        ).toEqual(["instruction.md"]);
+        expect((await monchu.client.root(existing).modelChoice()).defaults.modelId).toBe(
+          (await head.modelChoice()).defaults.modelId,
+        );
+      } finally {
+        childView.dispose();
+      }
+    } finally {
+      stop();
+      headView.dispose();
+    }
   });
 
   it("starts workers that report to the front, and messages, closes a batch or one from a client, reopens and stops them", async () => {

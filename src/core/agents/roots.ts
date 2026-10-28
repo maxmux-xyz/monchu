@@ -17,8 +17,10 @@ import { rootNoticeText } from "../../api/notices.ts";
 import type { RootStatus, RootSummary } from "../../api/client.ts";
 import { JobsDoc, moveJobs, type JobsState } from "../jobs.ts";
 import { GoalsDoc } from "./goals.ts";
+import { InboxItemsDoc } from "../inbox.ts";
 import { findRoot, rootRecord, RootsDoc, type RootRecord } from "./root-records.ts";
 import { listWorkers, moveWorker, WorkersDoc } from "./workers.ts";
+import { checkDirectoryOwner } from "./sessions.ts";
 
 const LABEL_LENGTH = 60;
 
@@ -52,8 +54,14 @@ export function currentRoot(roots: readonly RootRecord[]): RootRecord | undefine
 
 /** Records the user's input to a root: when, a label from the first message, and unarchiving it. */
 export async function noteInput(tx: Tx, id: ConversationId, message: string): Promise<void> {
-  const root = rootRecord(await tx.doc(RootsDoc), id);
+  const state = await tx.doc(RootsDoc);
+  const root = rootRecord(state, id);
   if (root === undefined) return;
+  if (root.archived && root.directory !== undefined)
+    checkDirectoryOwner(
+      state.roots.filter((item) => item.id !== id),
+      root.directory,
+    );
   root.lastInputAt = Date.now();
   if (!root.named && root.label === "") root.label = labelFrom(message);
   delete root.archived;
@@ -112,6 +120,21 @@ export async function summarize(
   const running = own.filter((job) => job.type === "bg" && job.ended === undefined).length;
   const scheduled = own.filter((job) => job.type !== "bg" && job.status === "active").length;
   const front = live?.run === undefined ? "idle" : "working";
+  const startup =
+    root.startupTask === undefined ? undefined : await harness.getTask(root.startupTask, context);
+  const starting = startup !== undefined && startup.state.status !== "terminal";
+  const error =
+    startup?.state.status === "terminal" &&
+    (startup.state.outcome.status === "failed" || startup.state.outcome.status === "faulted")
+      ? startup.state.outcome.error.message
+      : undefined;
+  const asks =
+    root.directory === undefined
+      ? undefined
+      : await harness.snapshot(InboxItemsDoc, root.id, context);
+  const needsInput =
+    (asks?.items.some((item) => item.kind === "ask" && item.state === "open") ?? false) ||
+    (asks?.pending?.some((item) => item.state === "open") ?? false);
   // Scheduled jobs waiting for their slot don't make a root active; a run they wake shows as a busy worker.
   let status: RootStatus = "idle";
   if (front === "working" || busy > 0 || running > 0) status = "working";
@@ -119,6 +142,7 @@ export async function summarize(
     const answered = await lastAnswer(harness, root.id, context);
     if (answered !== undefined && answered > (root.seenAt ?? root.createdAt)) status = "done";
   }
+  if (root.directory !== undefined) status = front === "working" || starting ? "working" : "idle";
   return {
     id: shortId(root.id),
     label: root.label,
@@ -130,6 +154,9 @@ export async function summarize(
     front,
     workers: { open: workers.length, busy },
     jobs: { running, scheduled },
+    ...(root.directory === undefined ? {} : { directory: root.directory, needsInput }),
+    ...(root.spawnedBy === undefined ? {} : { spawnedBy: shortId(root.spawnedBy) }),
+    ...(error === undefined ? {} : { error }),
   };
 }
 
@@ -138,6 +165,7 @@ export const SUMMARY_KINDS: ReadonlySet<string> = new Set([
   LiveDoc.definition.kind,
   RootsDoc.definition.kind,
   JobsDoc.definition.kind,
+  InboxItemsDoc.definition.kind,
   "monchu.workers",
 ]);
 
@@ -172,6 +200,8 @@ export const Roots = defineExtension({
     section("roots", async (input, context) => {
       const state = await input.read.snapshot(RootsDoc, context);
       const self = state === undefined ? undefined : rootRecord(state, input.conversationId);
+      if (self?.directory !== undefined)
+        return "Independent directory session; spawning relationships are shown to the human in the session tree.";
       const others = (state?.roots ?? []).filter((root) => !root.archived && root !== self);
       // Ids and labels only: activity would change the prompt every turn.
       if (self === undefined || others.length === 0) return undefined;

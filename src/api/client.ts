@@ -12,6 +12,14 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { ConversationView, EntryRecord, ModelRef } from "@earendil-works/pi-durable";
 import type { Attachment } from "./attachments.ts";
+import type {
+  DirectoryCatalog,
+  DirectoryFile,
+  DirectoryListing,
+  FolderListing,
+  NewSession,
+  SessionDirectory,
+} from "./directories.ts";
 import type { Goal } from "../core/agents/goals.ts";
 import type { listWorkersWithActivity } from "../core/agents/workers.ts";
 import type { ModelRole, Settings } from "../core/config.ts";
@@ -114,6 +122,10 @@ export type RootSummary = {
   workers: { open: number; busy: number };
   /** This root's jobs: `bg` commands running now, and scheduled jobs that are active (not paused). */
   jobs: { running: number; scheduled: number };
+  directory?: SessionDirectory;
+  spawnedBy?: string;
+  needsInput?: boolean;
+  error?: string;
 };
 
 export type RootStatus = "working" | "done" | "idle";
@@ -232,6 +244,13 @@ export interface Client {
   currentRoot(): Promise<string>;
   /** Starts a root and returns its id; a retry with the same request ID returns the same root. */
   createRoot(requestId: string): Promise<string>;
+  /** Browse folders on the host; relative paths resolve against base or the Monchu home. */
+  browseFolders(path: string, base?: string, query?: string): Promise<FolderListing>;
+  discoverDirectories(path: string): Promise<DirectoryCatalog>;
+  createSession(input: NewSession, requestId: string): Promise<string>;
+  assignDirectory(id: string, input: NewSession): Promise<void>;
+  listDirectory(id: string, path: string): Promise<DirectoryListing>;
+  readDirectoryFile(id: string, path: string): Promise<DirectoryFile>;
   /** Names a root; an empty label goes back to naming it from its next message. */
   renameRoot(id: string, label: string): Promise<void>;
   /** Hides a root from the list and plain `monchu`, or shows it again; refused while its front or crew is working. */

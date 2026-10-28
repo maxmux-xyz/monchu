@@ -4,7 +4,6 @@
  * opens the workers menu; at the right edge, in a thumb's reach, the roots as counts (● working, ✓ done and not seen
  * yet, ○ idle) opening the roots menu. Counts show a new worker or a root's change without a tab for each.
  */
-import type { ComponentChildren } from "preact";
 import { rootLabel, rootTally } from "../ui/roots.ts";
 import { presentation } from "../ui/state.ts";
 import { run } from "./commands.ts";
@@ -82,12 +81,10 @@ function Roots() {
   );
 }
 
-/** The bar, and under it on a phone or between its two ends on a wide screen, the stream's `lenses`. */
-export function TopBar({ lenses }: { lenses: ComponentChildren }) {
+export function TopBar() {
   return (
     <nav class="agents" aria-label="conversations">
       <Crew />
-      {lenses}
       <Roots />
     </nav>
   );

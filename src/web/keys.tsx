@@ -1,26 +1,15 @@
 /**
- * The key bar: every editor key the terminal binds, as a tap for a touch keyboard that has no Esc, Alt or Ctrl. There,
- * the keyboard's Enter adds a line and the bar's send sends. Each button shows its state rather than explaining it,
- * names its desktop key in its title, and keeps the editor's focus so the on-screen keyboard stays up.
+ * Message actions and contextual picker controls. Buttons keep the editor focused so a touch keyboard stays open.
  */
 import type { ComponentChildren } from "preact";
 import { presentation } from "../ui/state.ts";
 import { run } from "./commands.ts";
-import {
-  draft,
-  editing,
-  escapeLeaves,
-  expandAll,
-  mode,
-  promptDrafts,
-  shown,
-  view,
-} from "./state.ts";
+import { editing, escapeLeaves, shown, view } from "./state.ts";
 
-/** A busy mode as the key bar and the queue draw it. */
+/** Queue delivery modes. */
 export const MODE = { steer: "↯", followUp: "⇢" };
 
-/** A key: a square cell that keeps the editor's focus, and shows when it is pressed or can't act now. */
+/** Preserve editor focus when a message or picker action is clicked. */
 export function Key(props: {
   label: string;
   title: string;
@@ -47,79 +36,44 @@ export function Key(props: {
   );
 }
 
-/** The bar; `children` go after the editing keys, before send (the attach button). */
-export function Keys({ send, children }: { send: () => void; children?: ComponentChildren }) {
+/** Only the actions needed to send, stop, or finish editing a message. */
+export function ComposerActions({ send }: { send: () => void }) {
   const root = view(undefined)?.value;
   const stoppable = shown.value === undefined && root !== undefined && presentation(root).busy;
   const edit = editing.value !== undefined;
-  const steer = mode.value === "steer";
+  const touch = matchMedia("(pointer: coarse)").matches;
+  if (!edit && !stoppable && !touch) return null;
   return (
-    <div class="keys" role="toolbar" aria-label="keys">
+    <div class="composer-actions" role="group" aria-label="Message actions">
       {edit ? (
-        <Key
-          class="icon"
-          label="leave the edit"
-          title="leave the edit, unsaved (Esc)"
-          onPress={() => run("edit.leave")}
-        >
-          ✕
+        <Key label="cancel edit" title="cancel the edit (Esc)" onPress={() => run("edit.leave")}>
+          Cancel
         </Key>
       ) : stoppable ? (
         <Key
-          class="icon"
           label="stop"
-          title={escapeLeaves.value ? "stop the root's run" : "stop the root's run (Esc)"}
+          title={escapeLeaves.value ? "stop the run" : "stop the run (Esc)"}
           onPress={() => run("stop")}
         >
-          ■
+          Stop
         </Key>
       ) : null}
-      <Key
-        class={`icon mode${steer ? " steer" : ""}`}
-        label={steer ? "steer" : "follow-up"}
-        title={`${steer ? "steer: joins a busy run" : "follow-up: waits for a busy run"} · tap to switch`}
-        onPress={() => run("mode")}
-      >
-        {MODE[mode.value]}
-      </Key>
-      <Key
-        class="icon"
-        label="drafts"
-        title={`drafts: save or restore (${promptDrafts.value.length} saved)`}
-        onPress={() => run("drafts")}
-      >
-        ✎
-      </Key>
-      <Key
-        class="icon"
-        label="expand all"
-        title="expand every card"
-        pressed={expandAll.value}
-        onPress={() => run("expand")}
-      >
-        {expandAll.value ? "⊟" : "⊞"}
-      </Key>
-      {draft.value === "" ? (
-        <Key class="icon" label="commands" title="commands (/)" onPress={() => run("slash")}>
-          /
+      {edit || touch ? (
+        <Key
+          class="send"
+          label={edit ? "save" : "send"}
+          title={edit ? "save the queued message (Enter)" : "send (Enter)"}
+          onPress={send}
+        >
+          {edit ? "Save" : "Send"}
         </Key>
       ) : null}
-      {children}
-      <Key
-        class="icon send"
-        label={edit ? "save" : "send"}
-        title={edit ? "save the queued message (Enter)" : "send (Enter)"}
-        onPress={send}
-      >
-        {edit ? "✓" : "➤"}
-      </Key>
     </div>
   );
 }
 
 /**
- * The bar under a pick's filter, the key bar's height so the box above stays put: the pick's alternate as a toggle
- * (Shift+Enter takes the row with it), and choose in send's place.
+ * Picker confirmations keep the composer height stable. Shift+Enter takes the alternate choice.
  */
 export function PickKeys(props: {
   alternate: string | undefined;

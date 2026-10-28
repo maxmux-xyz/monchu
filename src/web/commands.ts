@@ -100,7 +100,16 @@ const WEB_COMMANDS: { item: MenuItem; run: (text: string) => unknown }[] = [
 export function slashCommands(core: Client | undefined): MenuItem[] {
   return [
     ...(core === undefined ? [] : clientCommands("web", core.commands())).map(
-      ([name, { usage, help }]) => command(name, usage, help),
+      ([name, { usage, help }]) =>
+        command(
+          name,
+          usage,
+          name === "/model"
+            ? "pick a model for this session"
+            : name === "/thinking"
+              ? "pick a thinking level for this session"
+              : help,
+        ),
     ),
     ...WEB_COMMANDS.map((each) => each.item),
     ...(core?.skills() ?? []).map((skill) =>
@@ -245,7 +254,6 @@ const ACTIONS = {
   // The page's controls.
   send: { run: send } satisfies Action<[string]>,
   "feed.clear": { run: clearFilter, available: front } satisfies Action,
-  "feed.kind": { run: filterKind, available: front } satisfies Action<[Filter["kind"]]>,
   show: { run: show } satisfies Action<[string | undefined]>,
   reply: { run: replyDraft } satisfies Action<[string]>,
   pin: { run: togglePin } satisfies Action<[string]>,

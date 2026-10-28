@@ -653,9 +653,12 @@ async function bundle(): Promise<void> {
     ),
   );
   gate("web build within its budget", true, built.trim());
+  const startup = /startup (\d+) bytes gzip/.exec(built)?.[1];
+  check(startup !== undefined, "the build did not report its startup bundle size");
+  report.metrics["bundle.js.gzipBytes"] = Number(startup);
   const dist = join(ROOT, "dist", "web");
   for (const file of await readdir(dist)) {
-    const kind = /^app\..+\.js$/.test(file) ? "js" : /^style\..+\.css$/.test(file) ? "css" : "";
+    const kind = /^style\..+\.css$/.test(file) ? "css" : "";
     if (kind)
       report.metrics[`bundle.${kind}.gzipBytes`] = gzipSync(
         await readFile(join(dist, file)),
@@ -861,6 +864,14 @@ async function nextRelease(): Promise<string> {
   return root;
 }
 
+async function paletteAction(label: string): Promise<void> {
+  await browser("fill", "textarea", "/palette");
+  await browser("press", "Enter");
+  await browser("wait", ".pick [role=option]");
+  await browser("fill", "textarea", label);
+  await browser("press", "Enter");
+}
+
 async function journeys(
   url: string,
   home: string,
@@ -907,6 +918,303 @@ async function journeys(
     );
     return "signed in through the OpenID login; the reload came from the service worker";
   });
+
+  if (WIDTH > 720)
+    await journey("directory: create, spawn, switch and reload desktop sessions", async () => {
+      check(
+        (await page(`document.querySelector('.session-repository') === null`)) === true,
+        "empty setup still shows a repository banner",
+      );
+      const original = text(await page(`new URLSearchParams(location.search).get("root")`));
+      const repoPath = join(home, "coding-repo");
+      await mkdir(join(repoPath, "product", "web-ui"), { recursive: true });
+      await writeFile(
+        join(repoPath, "product", "web-ui", "instruction.md"),
+        "# Web UI\nPlan the desktop product.\n",
+      );
+      await mkdir(join(repoPath, "tasks", "in-progress", "agent-hierarchy"), { recursive: true });
+      await writeFile(
+        join(repoPath, "tasks", "in-progress", "agent-hierarchy", "instruction.md"),
+        "# Agent hierarchy\nPlan the session tree.\n",
+      );
+      await writeFile(
+        join(repoPath, "tasks", "in-progress", "agent-hierarchy", "plan.md"),
+        "Existing plan.\n",
+      );
+      await writeFile(join(repoPath, "tasks", "in-progress", "agent-hierarchy", "progress.md"), "");
+      await mkdir(join(repoPath, "design", "future"), { recursive: true });
+      await writeFile(
+        join(repoPath, "design", "future", "instruction.md"),
+        "# Future design\nNo agent yet.\n",
+      );
+      await browser("click", '[aria-label="Directories"]');
+      await browser("wait", ".directory-catalog input");
+      await browser("fill", 'input[name="directoryRoot"]', repoPath);
+      await browser("click", '[aria-label="Browse Folder"]');
+      await browser("wait", ".folder-picker li button");
+      check(
+        (await page(`document.querySelector(".folder-path").textContent`)) === repoPath,
+        "folder picker opened outside the chosen folder",
+      );
+      await browser("click", ".folder-picker > button");
+      await browser("click", '.directory-catalog button[type="submit"]');
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelectorAll('.directory-catalog li').length===3`,
+      );
+      await capture("directory-catalog", home, origin);
+      await page(
+        `[...document.querySelectorAll('.directory-catalog li button')].find(row=>row.textContent.includes('Web UI')).click()`,
+      );
+      await browser("wait", ".session-form");
+      await browser("fill", "input[name=name]", "Web UI");
+      await browser("fill", "input[name=repoPath]", home);
+      await browser("click", '[aria-label="Browse Repository"]');
+      await browser("wait", ".folder-picker li button");
+      await page(
+        `[...document.querySelectorAll(".folder-picker li button")].find(row=>row.textContent==="coding-repo/").click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".folder-path")?.textContent === ${JSON.stringify(repoPath)} && !document.querySelector(".folder-picker [role=status]")`,
+      );
+      await capture("folder-picker", home, origin);
+      await browser("fill", '[aria-label="Search folders"]', "PRODUCT");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".folder-picker [role=status]") && document.querySelectorAll(".folder-picker li").length===1 && document.querySelector(".folder-picker li").textContent==="product/"`,
+      );
+      check(
+        (await page(
+          `document.activeElement === document.querySelector('[aria-label="Search folders"]')`,
+        )) === true,
+        "folder search lost keyboard focus",
+      );
+      await browser("press", "Enter");
+      check(
+        (await page(`document.querySelector(".session-form") !== null`)) === true,
+        "Enter in search submitted the session form",
+      );
+      await capture("folder-search", home, origin);
+      await browser("fill", '[aria-label="Search folders"]', "no-match");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".folder-picker [role=status]") && document.querySelector(".folder-picker").textContent.includes("No matching folders")`,
+      );
+      await browser("fill", '[aria-label="Search folders"]', "");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".folder-picker [role=status]") && document.querySelectorAll(".folder-picker li").length===3`,
+      );
+      await browser("click", ".folder-navigation button:nth-child(2)");
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".folder-path")?.textContent === ${JSON.stringify(home)} && !document.querySelector(".folder-picker [role=status]")`,
+      );
+      await page(
+        `[...document.querySelectorAll(".folder-picker li button")].find(row=>row.textContent==="coding-repo/").click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".folder-path")?.textContent === ${JSON.stringify(repoPath)} && !document.querySelector(".folder-picker [role=status]")`,
+      );
+      await browser("click", ".folder-picker > button");
+      check(
+        (await page(`document.querySelector("input[name=repoPath]").value`)) === repoPath,
+        "selected repository did not fill the form",
+      );
+      await browser("fill", "input[name=ownedDirectory]", "product");
+      await browser("click", '[aria-label="Browse Directory"]');
+      await browser("wait", ".folder-picker li button");
+      await page(
+        `[...document.querySelectorAll(".folder-picker li button")].find(row=>row.textContent==="web-ui/").click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".folder-path")?.textContent === ${JSON.stringify(join(repoPath, "product", "web-ui"))} && !document.querySelector(".folder-picker [role=status]")`,
+      );
+      await browser("press", "Escape");
+      check(
+        (await page(
+          `document.querySelector(".session-form") !== null && document.querySelector(".folder-picker") === null && document.querySelector("input[name=ownedDirectory]").value === "product"`,
+        )) === true,
+        "cancelling a folder pick changed the path or closed the form",
+      );
+      await browser("click", '[aria-label="Browse Directory"]');
+      await browser("wait", ".folder-picker li button");
+      await page(
+        `[...document.querySelectorAll(".folder-picker li button")].find(row=>row.textContent==="web-ui/").click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".folder-path")?.textContent === ${JSON.stringify(join(repoPath, "product", "web-ui"))} && !document.querySelector(".folder-picker [role=status]")`,
+      );
+      await browser("click", ".folder-picker > button");
+      check(
+        (await page(`document.querySelector('textarea[name="brief"]') === null`)) === true,
+        "opening existing work still asks for an assignment",
+      );
+      check(
+        (await page(`document.querySelectorAll('select[name=directoryType] option').length`)) === 7,
+        "the seven directory types aren't available",
+      );
+      check(
+        (await page(`document.querySelector('select[name=directoryType]').value`)) === "product",
+        "the default directory type is wrong",
+      );
+      await browser("click", ".session-form button[type=submit]");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector('.session-form') && document.querySelector('.directory-document')?.textContent.includes('Plan the desktop product.')`,
+      );
+      await browser("wait", "--fn", SETTLED);
+      const head = await page(`new URLSearchParams(location.search).get("root")`);
+      check(
+        (await page(
+          `document.querySelector('.session-repository').textContent.includes(${JSON.stringify(repoPath)})`,
+        )) === true,
+        "repository header is wrong",
+      );
+      check(
+        (await page(
+          `(() => {const a=document.querySelector('.sessions').getBoundingClientRect(); const b=document.querySelector('.chat-pane').getBoundingClientRect(); const c=document.querySelector('.directory-files').getBoundingClientRect(); return a.right<=b.left+1 && b.right<=c.left+1 && c.width>250;})()`,
+        )) === true,
+        "desktop panes overlap or files are missing",
+      );
+      const child = {
+        name: "Agent hierarchy",
+        brief: "Plan the session tree.",
+        directoryType: "task",
+        agentRole: "worker",
+        repoPath,
+        codeDirectory: repoPath,
+        ownedDirectory: join(repoPath, "tasks", "in-progress", "agent-hierarchy"),
+      };
+      await browser("fill", ".editor textarea", `call start_session ${JSON.stringify(child)}`);
+      await browser("press", "Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `[...document.querySelectorAll('.session-row')].some(row=>row.textContent.includes('Agent hierarchy - task'))`,
+      ).catch(async (error: unknown) => {
+        await capture("directory-spawn-failed", home, origin);
+        throw error;
+      });
+      check(
+        (await page(
+          `[...document.querySelectorAll('.sessions > ul > li > ul .session-row')].some(row=>row.textContent.includes('Agent hierarchy - task'))`,
+        )) === true,
+        "spawned session isn't nested beneath its parent",
+      );
+      await browser("fill", ".editor textarea", "Keep product draft");
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('Agent hierarchy - task')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.directory-path')?.textContent.includes('agent-hierarchy')`,
+      );
+      check(
+        (await page(`document.querySelector('.editor textarea').value`)) === "",
+        "parent draft leaked into child",
+      );
+      await browser("fill", ".editor textarea", "Keep task draft");
+      await browser("wait", "--fn", SETTLED);
+      await page(
+        `[...document.querySelectorAll('.directory-list button')].find(row=>row.textContent==='progress.md').click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.directory-filename')?.textContent==='progress.md'`,
+      );
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('Web UI - product')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `new URLSearchParams(location.search).get('root')===${JSON.stringify(head)}`,
+      );
+      check(
+        (await page(`document.querySelector('.editor textarea').value`)) === "Keep product draft",
+        "parent draft wasn't restored",
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.directory-document')?.textContent.includes('Plan the desktop product.')`,
+      );
+      await browser("fill", ".editor textarea", "");
+      await capture("directory-tree", home, origin);
+      await browser("reload");
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.directory-document')?.textContent.includes('Plan the desktop product.')`,
+      );
+      check(
+        (await page(`document.querySelectorAll('.session-row').length`)) === 2,
+        "sessions disappeared after reload",
+      );
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('Agent hierarchy - task')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.directory-path')?.textContent.includes('agent-hierarchy')`,
+      );
+      check(
+        (await page(`document.querySelector('.editor textarea').value`)) === "Keep task draft",
+        "child draft wasn't restored after reload",
+      );
+      await capture("directory-child", home, origin);
+      await browser("fill", ".editor textarea", "");
+      await browser("click", '[aria-label="Directories"]');
+      await browser("wait", ".directory-catalog li");
+      check(
+        (await page(
+          `[...document.querySelectorAll('.directory-catalog li button')].some(row=>row.textContent.includes('Future design') && row.textContent.includes('Open'))`,
+        )) === true,
+        "directory without an agent is missing",
+      );
+      await page(
+        `[...document.querySelectorAll('.directory-catalog li button')].find(row=>row.textContent.includes('Agent hierarchy')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector('.directory-catalog') && document.querySelector('.directory-path')?.textContent.includes('agent-hierarchy')`,
+      );
+      check(
+        (await page(`document.querySelectorAll('.session-row').length`)) === 2,
+        "resuming a directory created another session",
+      );
+      check(
+        (await readFile(join(repoPath, "product", "web-ui", "instruction.md"), "utf8")) ===
+          "# Web UI\nPlan the desktop product.\n",
+        "opening the directory rewrote its instructions",
+      );
+      await browser("open", `${url}?root=${original}`);
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.transcript')?.textContent.includes('/help')`,
+      );
+      return "all directories, including ones without agents; open existing instructions without assignment or file changes; resume live agents; chat spawning, drafts, file selection and reload preserve sessions";
+    });
 
   await journey(
     "client: /client names this device's app, picks a theme, offers the install once",
@@ -987,6 +1295,49 @@ async function journeys(
       return "offered the install once, renamed the app (manifest and title, kept over a reload), themed it dark, reset both";
     },
   );
+
+  await journey("composer: Enter sends without an idle action row", async () => {
+    check(
+      (await page(
+        `document.querySelector('.editor [role="toolbar"]') === null && document.querySelector('.composer-actions') === null`,
+      )) === true,
+      "idle composer still has an action row",
+    );
+    await browser("fill", ".editor textarea", "first line");
+    await browser("press", "Shift+Enter");
+    check(
+      (await page(`document.querySelector('.editor textarea').value`)) === "first line\n",
+      "Shift+Enter did not add a line",
+    );
+    await browser("fill", ".editor textarea", "hello from Enter");
+    await browser("press", "Enter");
+    await browser("wait", "--fn", SETTLED);
+    check(
+      (await page(`document.querySelector('.editor textarea').value`)) === "",
+      "Enter kept the draft",
+    );
+    await browser("fill", ".editor textarea", `busy ${"x".repeat(1600)}`);
+    await browser("press", "Enter");
+    await browser("wait", '.composer-actions [aria-label="stop"]');
+    check(
+      (await page(
+        `[...document.querySelectorAll('.composer-actions button')].map(button=>button.textContent.trim()).join(',')`,
+      )) === "Stop",
+      "working composer has extra actions",
+    );
+    check(
+      (await page(`document.querySelector('.editor .line .composer-actions') !== null`)) === true,
+      "Stop occupies a separate row",
+    );
+    await browser("click", '.composer-actions [aria-label="stop"]');
+    await browser(
+      "wait",
+      "--fn",
+      `!document.querySelector('.live') && !document.querySelector('.composer-actions')`,
+    );
+    await capture("composer", home, origin);
+    return "no idle action row; Enter sends, Shift+Enter adds a line, and Stop appears inline only while working";
+  });
 
   await journey("send: a message gets its streamed reply", async () => {
     await browser("fill", "textarea", "hello");
@@ -1203,43 +1554,40 @@ async function journeys(
     },
   );
 
-  await journey(
-    "paste: an image pasted anywhere on the page attaches, the ❐ key pastes images and text",
-    async () => {
-      (await copyToClipboard({ width: 64, height: 48 })).close();
-      // Ctrl+V with the focus off the editor, as in a key plugin's normal mode.
-      await page(`document.querySelector(".editor textarea").blur()`);
-      await browser("press", "Control+v");
-      await browser(
-        "wait",
-        "--fn",
-        `document.querySelectorAll(".attach-tray li").length === 1 && document.querySelector(".attach-tray img")?.naturalWidth === 64`,
-      );
-      let clipboard = await copyToClipboard({ width: 32, height: 32 });
-      await browser("click", "[aria-label=paste]");
-      await browser(
-        "wait",
-        "--fn",
-        `[...document.querySelectorAll(".attach-tray img")].map((img) => img.naturalWidth).join() === "64,32"`,
-      );
-      await capture("paste", home, origin);
-      await browser("fill", "textarea", "ab");
-      await page(`document.querySelector(".editor textarea").setSelectionRange(1, 1)`);
-      clipboard.close();
-      clipboard = await copyToClipboard("pasted");
-      await browser("click", "[aria-label=paste]");
-      await browser(
-        "wait",
-        "--fn",
-        `document.querySelector(".editor textarea").value === "apastedb"`,
-      );
-      clipboard.close();
-      await browser("fill", "textarea", "/attach clear");
-      await browser("press", "Enter");
-      await browser("wait", "--fn", `document.querySelector(".attach-tray") === null`);
-      return "Ctrl+V off the editor and the ❐ key attached images; ❐ put text at the caret";
-    },
-  );
+  await journey("paste: native paste attaches images and inserts text at the caret", async () => {
+    (await copyToClipboard({ width: 64, height: 48 })).close();
+    // Ctrl+V with the focus off the editor, as in a key plugin's normal mode.
+    await page(`document.querySelector(".editor textarea").blur()`);
+    await browser("press", "Control+v");
+    await browser(
+      "wait",
+      "--fn",
+      `document.querySelectorAll(".attach-tray li").length === 1 && document.querySelector(".attach-tray img")?.naturalWidth === 64`,
+    );
+    let clipboard = await copyToClipboard({ width: 32, height: 32 });
+    await browser("press", "Control+v");
+    await browser(
+      "wait",
+      "--fn",
+      `[...document.querySelectorAll(".attach-tray img")].map((img) => img.naturalWidth).join() === "64,32"`,
+    );
+    await capture("paste", home, origin);
+    await browser("fill", "textarea", "ab");
+    await page(`document.querySelector(".editor textarea").setSelectionRange(1, 1)`);
+    clipboard.close();
+    clipboard = await copyToClipboard("pasted");
+    await browser("press", "Control+v");
+    await browser(
+      "wait",
+      "--fn",
+      `document.querySelector(".editor textarea").value === "apastedb"`,
+    );
+    clipboard.close();
+    await browser("fill", "textarea", "/attach clear");
+    await browser("press", "Enter");
+    await browser("wait", "--fn", `document.querySelector(".attach-tray") === null`);
+    return "native paste attaches images and puts text at the caret";
+  });
 
   await journey(
     "order: notices and messages in the order they happened, the end followed",
@@ -1487,6 +1835,15 @@ async function journeys(
         true,
       "the picker has no header",
     );
+    check(
+      (await page(`document.querySelector(".pick header").textContent.startsWith("Model ·")`)) ===
+        true,
+      "/model opened the target menu instead of the model list",
+    );
+    check(
+      (await page(`document.querySelector('.keys .alternate') === null`)) === true,
+      "the session model picker offers to save a role default",
+    );
     await capture("model", home, origin);
     // The editor's box filters the pick in place, and the draft waits under it.
     const rows = `document.querySelectorAll(".pick [role=option]").length`;
@@ -1501,8 +1858,87 @@ async function journeys(
       (await page(`document.querySelector("textarea").value`)) === "",
       "the draft didn't come back after the picker",
     );
-    return "picker opened over a still box, filtered, and closed";
+    const config = await readFile(join(home, "config.json"), "utf8");
+    await browser("fill", "textarea", "/model faux/worker");
+    await browser("press", "Enter");
+    await browser("wait", ".pick [role=option]");
+    check(
+      (await page(`document.querySelectorAll(".pick [role=option]").length`)) === 1,
+      "/model search did not filter the model list",
+    );
+    await browser("press", "Shift+Enter");
+    check(
+      (await page(`document.querySelector(".pick") !== null`)) === true,
+      "Shift+Enter saved a role default from the session picker",
+    );
+    await browser("press", "Enter");
+    await browser(
+      "wait",
+      "--fn",
+      `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("this session model · faux/worker · this conversation only")`,
+    );
+    check(
+      (await readFile(join(home, "config.json"), "utf8")) === config,
+      "a session model pick changed saved defaults",
+    );
+    await browser("reload");
+    await browser("wait", "textarea");
+    await browser("fill", "textarea", "/model");
+    await browser("press", "Enter");
+    await browser("wait", ".pick [role=option]");
+    check(
+      (await page(
+        `document.querySelector(".pick [role=option]").textContent.includes("faux/worker") && document.querySelector(".pick [role=option]").textContent.includes("current")`,
+      )) === true,
+      "the session model pick did not survive reload",
+    );
+    await browser("fill", "textarea", "faux/front");
+    await browser("press", "Enter");
+    await browser("wait", "--fn", `!document.querySelector(".pick")`);
+    return "model list opened directly for this session, filtered, cancelled, selected without changing defaults, and kept through reload";
   });
+
+  await journey(
+    "thinking: pick the current session's level directly and keep it through reload",
+    async () => {
+      const config = await readFile(join(home, "config.json"), "utf8");
+      await browser("fill", "textarea", "/thinking");
+      await browser("press", "Enter");
+      await browser("wait", ".pick [role=option]");
+      check(
+        (await page(
+          `document.querySelector(".pick header").textContent.startsWith("Thinking level ·") && document.querySelector(".keys .alternate") === null`,
+        )) === true,
+        "/thinking opened a target or saved-default picker",
+      );
+      await capture("thinking", home, origin);
+      const level = text(await page(`document.querySelector(".pick [role=option] b").textContent`));
+      await browser("click", ".pick [role=option]:first-child");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("this session thinking · ${level} · this conversation only")`,
+      );
+      check(
+        (await readFile(join(home, "config.json"), "utf8")) === config,
+        "a thinking pick changed saved defaults",
+      );
+      await browser("reload");
+      await browser("wait", "textarea");
+      await browser("fill", "textarea", "/thinking");
+      await browser("press", "Enter");
+      await browser("wait", ".pick [role=option]");
+      check(
+        (await page(
+          `document.querySelector(".pick [role=option][aria-selected=true]").textContent.includes(${JSON.stringify(level)}) && document.querySelector(".pick [role=option][aria-selected=true]").textContent.includes("current")`,
+        )) === true,
+        "the thinking pick did not survive reload",
+      );
+      await browser("press", "Escape");
+      await browser("wait", "--fn", `!document.querySelector(".pick")`);
+      return "thinking levels opened directly, applied only to the current session, and persisted through reload";
+    },
+  );
 
   await journey(
     "commands: an argument completes, /search jumps to a message, /palette runs an action",
@@ -1858,7 +2294,7 @@ async function journeys(
   );
 
   await journey(
-    "pins: the star pins a reply, a reload keeps it, the top bar and /pins open them, filter, open, unpin",
+    "pins: the star pins a reply, a reload keeps it, /pins opens them, filter, open, unpin",
     async () => {
       const command = async (text: string, done: string) => {
         await browser("fill", "textarea", text);
@@ -1886,14 +2322,7 @@ async function journeys(
       await browser("reload");
       await browser("wait", "--fn", `${star}?.getAttribute("aria-pressed") === "true"`);
       const pins = `document.querySelector(".pinsMenu")`;
-      // The filter bar's star opens them without knowing `/pins`, and closes them again.
-      const tab = `document.querySelector(".filters .pins")`;
-      check((await page(`${tab}?.textContent`)) === "★", "the filter bar has no star for the pins");
-      // The filter row's glyphs sit in the middle of square cells, with or without a count, as every other's do.
-      const off = text(await page(`JSON.stringify(${OFF_CENTRE})`));
-      check(off === "[]", `glyph cells off square or centre: ${off}`);
-      await page(`${tab}.click()`);
-      await browser("wait", "--fn", `${pins}?.querySelector("li[role=option]")`);
+      await command("/pins", `${pins}?.querySelector("li[role=option]")`);
       const rows = () => page(`${pins}.querySelectorAll("li[role=option]").length`);
       check((await rows()) === 1, `the star doesn't list the pin: ${String(await rows())}`);
       // The selection follows its row: a pin made meanwhile lists above the one selected on opening, which stays so.
@@ -1910,11 +2339,7 @@ async function journeys(
       check((await page(chosen)) === first, "the selection didn't follow its pin");
       await page(`${other}.click()`);
       await browser("wait", "--fn", `${pins}.querySelectorAll("li[role=option]").length === 1`);
-      check(
-        (await page(`${tab}.getAttribute("aria-pressed")`)) === "true",
-        "the star isn't pressed while the pins are open",
-      );
-      await page(`${tab}.click()`);
+      await page(`document.querySelector(".editor [aria-label=back]").click()`);
       await browser("wait", "--fn", `!${pins}`);
       await command("/pins", `${pins}?.querySelector("li[role=option]")`);
       check((await rows()) === 1, `/pins doesn't list the pin: ${String(await rows())}`);
@@ -1934,16 +2359,11 @@ async function journeys(
       // › goes to the message in its conversation, marked as a search finds it.
       await page(`${pins}.querySelector(".go").click()`);
       await browser("wait", "--fn", `!${pins} && !!document.querySelector(".stamp.found")`);
-      await page(`${tab}.click()`);
-      await browser("wait", "--fn", `${pins}?.querySelector("li[role=option]")`);
+      await command("/pins", `${pins}?.querySelector("li[role=option]")`);
       await page(`${pins}.querySelector("[aria-label=unpin]").click()`);
       await browser("wait", "--fn", `${pins}.textContent.includes("nothing pinned yet")`);
       await page(`document.querySelector(".editor [aria-label=back]").click()`);
       await browser("wait", "--fn", `!${pins}`);
-      check(
-        (await page(`${tab}?.getAttribute("aria-pressed")`)) === "false",
-        "the star stays pressed once the pins close",
-      );
       return "pinned with the star, kept through a reload, filtered, opened in full, gone to, unpinned";
     },
   );
@@ -2086,132 +2506,111 @@ async function journeys(
     },
   );
 
-  await journey(
-    "touch: a phone with no Esc, Alt or Ctrl reaches every key by tapping",
-    async () => {
-      const touch = await touchScreen();
-      try {
-        await browser("reload");
-        // Connected, so the roots are in: the key bar shows before them.
-        await browser("wait", ".keys");
-        await browser("wait", ".link[data-state=live]");
-        check(
-          (await page(`matchMedia("(pointer: coarse)").matches`)) === true,
-          `no coarse pointer (${String(await page("navigator.maxTouchPoints"))} touch points)`,
-        );
-        // The keys plugin is desktop only: a phone's keyboard never triggers it.
-        await page(`document.querySelector("textarea").blur()`);
-        await browser("press", "?");
-        await browser("wait", "300");
-        check(
-          (await page(`document.querySelector(".pick") === null`)) === true,
-          "a key binding fired on a touch screen",
-        );
-        // A phone is offered push once; a dismissal outlives the page.
-        await browser("wait", ".offer");
-        check(
-          (await page(
-            `document.querySelector(".offer").textContent.includes("notify this phone")`,
-          )) === true,
-          "a phone isn't offered push",
-        );
-        await page(`document.querySelector(".offer [aria-label=close]").click()`);
-        check(
-          (await page(
-            `document.querySelector(".offer") === null && localStorage.getItem("monchu.push")`,
-          )) === "offered",
-          "a dismissed push offer stayed",
-        );
+  await journey("touch: the chat composer sends, stops, and edits messages by tap", async () => {
+    const touch = await touchScreen();
+    try {
+      await browser("reload");
+      // Wait for the composer and the live connection.
+      await browser("wait", ".composer-actions");
+      await browser("wait", ".link[data-state=live]");
+      check(
+        (await page(`matchMedia("(pointer: coarse)").matches`)) === true,
+        `no coarse pointer (${String(await page("navigator.maxTouchPoints"))} touch points)`,
+      );
+      // The keys plugin is desktop only: a phone's keyboard never triggers it.
+      await page(`document.querySelector("textarea").blur()`);
+      await browser("press", "?");
+      await browser("wait", "300");
+      check(
+        (await page(`document.querySelector(".pick") === null`)) === true,
+        "a key binding fired on a touch screen",
+      );
+      // A phone is offered push once; a dismissal outlives the page.
+      await browser("wait", ".offer");
+      check(
+        (await page(
+          `document.querySelector(".offer").textContent.includes("notify this phone")`,
+        )) === true,
+        "a phone isn't offered push",
+      );
+      await page(`document.querySelector(".offer [aria-label=close]").click()`);
+      check(
+        (await page(
+          `document.querySelector(".offer") === null && localStorage.getItem("monchu.push")`,
+        )) === "offered",
+        "a dismissed push offer stayed",
+      );
 
-        const value = () => page(`document.querySelector("textarea").value`);
-        const key = (label: string) =>
-          `[...document.querySelectorAll(".keys button")].find((item) => item.getAttribute("aria-label") === ${JSON.stringify(label)})`;
-        const tap = async (expression: string) => {
-          check((await page(`!!(${expression})`)) === true, `nothing to tap at ${expression}`);
-          await page(`(${expression}).click()`);
-        };
-        check(
-          (await page(
-            `(() => { const nav = document.querySelector(".agents"), tab = nav.lastElementChild; return tab.matches(".roots") && Math.abs(tab.getBoundingClientRect().right - nav.getBoundingClientRect().right) < 2 && tab.title.startsWith("second root") && tab.textContent.length < 12; })()`,
-          )) === true,
-          "the root menu isn't an icon on the right named for the root",
-        );
+      const value = () => page(`document.querySelector("textarea").value`);
+      const key = (label: string) =>
+        `[...document.querySelectorAll(".composer-actions button")].find((item) => item.getAttribute("aria-label") === ${JSON.stringify(label)})`;
+      const tap = async (expression: string) => {
+        check((await page(`!!(${expression})`)) === true, `nothing to tap at ${expression}`);
+        await page(`(${expression}).click()`);
+      };
+      check(
+        (await page(
+          `(() => { const nav = document.querySelector(".agents"), tab = nav.lastElementChild; return tab.matches(".roots") && Math.abs(tab.getBoundingClientRect().right - nav.getBoundingClientRect().right) < 2 && tab.title.startsWith("second root") && tab.textContent.length < 12; })()`,
+        )) === true,
+        "the root menu isn't an icon on the right named for the root",
+      );
 
-        await browser("fill", "textarea", "a");
-        await browser("press", "Enter");
-        check((await value()) === "a\n", "Enter on a touch screen didn't add a line");
-        await browser("fill", "textarea", "");
-        await tap(key("commands"));
-        check((await value()) === "/", "the / key didn't start a command");
-        await browser("fill", "textarea", "/mod");
-        await browser("click", "[role=option]");
-        check((await value()) === "/model ", "tapping the suggestion didn't take it");
-        await tap(key("send"));
-        await browser("wait", ".pick li");
-        check(
-          (await page(`getComputedStyle(document.querySelector(".pick .hint")).display`)) ===
-            "none",
-          "the picker shows desktop key hints",
-        );
-        await capture("touch-pick", home, origin);
-        await tap(`document.querySelector(".pick header .icon")`);
-        await browser("wait", "--fn", `!document.querySelector(".pick")`);
+      await browser("fill", "textarea", "a");
+      await browser("press", "Enter");
+      check((await value()) === "a\n", "Enter on a touch screen didn't add a line");
+      await browser("fill", "textarea", "");
+      await browser("fill", "textarea", "/mod");
+      await browser("click", "[role=option]");
+      check((await value()) === "/model ", "tapping the suggestion didn't take it");
+      await tap(key("send"));
+      await browser("wait", ".pick li");
+      check(
+        (await page(`getComputedStyle(document.querySelector(".pick .hint")).display`)) === "none",
+        "the picker shows desktop key hints",
+      );
+      await capture("touch-pick", home, origin);
+      await tap(`document.querySelector(".pick header .icon")`);
+      await browser("wait", "--fn", `!document.querySelector(".pick")`);
 
-        // The mode key shows the mode it's in, and a tap switches it.
-        await tap(key("follow-up"));
-        check(
-          (await page(`!!(${key("steer")})`)) === true &&
-            (await page(`document.querySelector("textarea").classList.contains("steer")`)) === true,
-          "the mode key didn't switch to steer",
-        );
-        await tap(key("steer"));
-        await tap(key("expand all"));
-        check(
-          (await page(`${key("expand all")}.getAttribute("aria-pressed")`)) === "true",
-          "the expand key didn't expand",
-        );
-        await tap(key("expand all"));
-
-        // A long reply keeps the root busy while the queue fills.
-        await browser("fill", "textarea", `busy ${"x".repeat(1600)}`);
-        await tap(key("send"));
-        await browser("wait", "--fn", `!!(${key("stop")})`);
-        await browser("fill", "textarea", "queued one");
-        await tap(key("send"));
-        await browser("wait", ".queue li .text");
-        await tap(`document.querySelector(".queue li .text")`);
-        check((await value()) === "queued one", "tapping the queued message didn't open it");
-        check(
-          (await page(`!!(${key("leave the edit")}) && !!(${key("save")})`)) === true,
-          "no edit keys",
-        );
-        await capture("touch-edit", home, origin);
-        await browser("fill", "textarea", "queued two");
-        await tap(key("save"));
-        await browser(
-          "wait",
-          "--fn",
-          `document.querySelector(".queue li")?.textContent.includes("queued two")`,
-        );
-        check((await value()) === "", "saving the edit didn't bring the draft back");
-        await tap(`document.querySelector(".queue li button[aria-label*='make it']")`);
-        await browser("wait", ".queue li.steer");
-        await tap(`document.querySelector(".queue li button[aria-label='delete it']")`);
-        await browser("wait", "--fn", `!document.querySelector(".queue")`);
-        await browser("fill", "textarea", "queued three");
-        await tap(key("send"));
-        await browser("wait", ".queue li");
-        await tap(key("stop"));
-        await browser("wait", "--fn", `!(${key("stop")}) && !document.querySelector(".queue")`);
-        check((await value()) === "queued three", "stopping didn't put the queued message back");
-        await browser("fill", "textarea", "");
-        await capture("touch-keys", home, origin);
-        return "Enter adds a line; / starts a command; send, the picker's close, steer, expand, queue edit, mode, delete and stop all by tap";
-      } finally {
-        touch.close();
-      }
-    },
-  );
+      // A long reply keeps the root busy while the queue fills.
+      await browser("fill", "textarea", `busy ${"x".repeat(1600)}`);
+      await tap(key("send"));
+      await browser("wait", "--fn", `!!(${key("stop")})`);
+      await browser("fill", "textarea", "queued one");
+      await tap(key("send"));
+      await browser("wait", ".queue li .text");
+      await tap(`document.querySelector(".queue li .text")`);
+      check((await value()) === "queued one", "tapping the queued message didn't open it");
+      check(
+        (await page(`!!(${key("cancel edit")}) && !!(${key("save")})`)) === true,
+        "no edit keys",
+      );
+      await capture("touch-edit", home, origin);
+      await browser("fill", "textarea", "queued two");
+      await tap(key("save"));
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".queue li")?.textContent.includes("queued two")`,
+      );
+      check((await value()) === "", "saving the edit didn't bring the draft back");
+      await tap(`document.querySelector(".queue li button[aria-label*='make it']")`);
+      await browser("wait", ".queue li.steer");
+      await tap(`document.querySelector(".queue li button[aria-label='delete it']")`);
+      await browser("wait", "--fn", `!document.querySelector(".queue")`);
+      await browser("fill", "textarea", "queued three");
+      await tap(key("send"));
+      await browser("wait", ".queue li");
+      await tap(key("stop"));
+      await browser("wait", "--fn", `!(${key("stop")}) && !document.querySelector(".queue")`);
+      check((await value()) === "queued three", "stopping didn't put the queued message back");
+      await browser("fill", "textarea", "");
+      await capture("touch-keys", home, origin);
+      return "Enter adds a line; commands are typed in chat; send, stop, picker close, and contextual queue editing work by tap";
+    } finally {
+      touch.close();
+    }
+  });
 
   await journey("compact: /compact ends with a line saying the context was compacted", async () => {
     for (const message of ["before compacting", "and once more"]) {
@@ -2507,12 +2906,11 @@ async function journeys(
       await send(`label ${id} ask smoke`);
       await browser("wait", "--fn", `!!document.querySelector(".askCard .reply")`);
       check(
-        (await page(`document.querySelector(".filters .yellow")?.getAttribute("aria-label")`)) ===
-          "asks: 1 open",
-        "the filter bar doesn't count the open ask",
+        (await page(`document.querySelector(".filters") === null`)) === true,
+        "the legacy filter bar is visible",
       );
       await capture("inbox-ask", home, origin);
-      await browser("click", ".filters button:nth-child(2)");
+      await paletteAction("feed: asks");
       check(
         (await page(`document.querySelectorAll(".transcript .user").length`)) === 0 &&
           (await page(`document.querySelectorAll(".transcript .assistant").length`)) === 1,
@@ -2533,15 +2931,15 @@ async function journeys(
       );
       await browser("fill", "textarea", "");
       // A kind with nothing in it says so, and never shows the front's live status.
-      await browser("click", ".filters button:nth-child(3)");
+      await paletteAction("feed: done");
       check(
         (await page(
           `document.querySelector(".transcript .status")?.textContent.includes("nothing here yet")`,
         )) === true,
         "an empty filter doesn't say it is empty",
       );
-      await browser("click", ".filters button:nth-child(3)");
-      await browser("click", ".filters .goal");
+      await paletteAction("feed: all");
+      await paletteAction("feed: goal");
       await browser("wait", "--fn", `!!document.querySelector(".pick")`);
       await browser("click", ".pick li:nth-child(2) .enter");
       await browser("wait", "--fn", `!!document.querySelector(".brief")`);
@@ -2551,7 +2949,10 @@ async function journeys(
         "the goal briefer is missing",
       );
       await capture("inbox-goal", home, origin);
-      await browser("click", ".filters button:first-child");
+      await paletteAction("feed: goal");
+      await browser("wait", ".pick [role=option]");
+      await browser("click", ".pick li:first-child .enter");
+      await browser("wait", "--fn", `!document.querySelector(".brief")`);
       await browser("click", ".askCard .reply");
       check(
         (await page(`document.querySelector("textarea").value`)) === `/reply ${id} `,
@@ -2613,10 +3014,10 @@ async function journeys(
         (await page(`!document.getElementById("m-${id}")`)) === true,
         "the ask was on the page before the reader went for it",
       );
-      await browser("click", ".filters button:nth-child(2)");
+      await paletteAction("feed: asks");
       await browser("wait", `.askCard #m-${id}`);
       await capture("history-ask", home, origin);
-      await browser("click", ".filters button:first-child");
+      await paletteAction("feed: all");
       await browser("fill", "textarea", `/reply ${id} yes`);
       await browser("press", "Enter");
       await browser("wait", "--fn", `!!document.querySelector(".askCard.answered")`);

@@ -33,6 +33,13 @@ import type {
 import type { LogRecord } from "./logs.ts";
 import type { Release } from "./release.ts";
 import type { McpServerReport } from "./reports.ts";
+import {
+  SessionInput,
+  type DirectoryCatalog,
+  type DirectoryFile,
+  type DirectoryListing,
+  type FolderListing,
+} from "./directories.ts";
 
 /**
  * Who asks: the core's or the server's own code, or one client connection. Stamped by the server where the connection
@@ -202,6 +209,15 @@ const sessionMethods = {
   findRoot: method(Type.Object({ prefix: text }), trusted<string>()),
   currentRoot: method(undefined, trusted<string>()),
   createRoot: method(Type.Object({ requestId: text }), trusted<string>()),
+  browseFolders: method(
+    Type.Object({ path: id, base: Type.Optional(id), query: Type.Optional(text) }),
+    trusted<FolderListing>(),
+  ),
+  discoverDirectories: method(Type.Object({ path: id }), trusted<DirectoryCatalog>()),
+  createSession: method(Type.Object({ input: SessionInput, requestId: id }), trusted<string>()),
+  assignDirectory: method(Type.Object({ root: id, input: SessionInput })),
+  listDirectory: method(Type.Object({ root: id, path: text }), trusted<DirectoryListing>()),
+  readDirectoryFile: method(Type.Object({ root: id, path: text }), trusted<DirectoryFile>()),
   renameRoot: method(Type.Object({ root: id, label: text })),
   archiveRoot: method(Type.Object({ root: id, archived: Type.Boolean() })),
   jobs: method(undefined, trusted<JobsState & { listing: string }>()),
