@@ -47,7 +47,7 @@ Providers cache each request's prefix (tools, system prompt, then messages). Any
 
 ## Code rules
 
-`mise run check` enforces most of these. Never weaken a check to pass it.
+`mise run check` enforces most of these. Never disable, bypass, or weaken a check just to make it pass. Exception: bundle-size budgets may increase when the human explicitly requests or approves the increase. Keep the size gate enforced, report the measured size and new limit, and leave unrelated checks unchanged.
 
 - **Layering.** `src/main.ts` composes the core (`src/core/`) and the TUI (`src/tui/`). Clients reach the core only through the `Client` contract in `src/api/` (browser-safe: core types only, no core code or Node). `src/ui/` (shared presentation) imports only `src/api/`. The core imports no client and no `src/ui/`, and never writes to stdout. Only the entry point touches process state (env, home, signals, re-exec).
 - **Extensions.** A module under `src/core/` exports one `defineExtension` named `monchu.<module>`: a constant, or a `create<Name>(inputs)` factory returning the extension, or `{ extension, ..., warnings }`. Register it in `build()` in `src/core/extensions.ts`, the facet `/reload` swaps; what outlives a reload comes in through `BuildInputs` (`src/core/build.ts`).

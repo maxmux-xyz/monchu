@@ -1751,7 +1751,19 @@ async function journeys(
       await page(`${childRow}.click()`);
       await browser("wait", "--fn", `!${childRow}?.querySelector(".session-unread")`);
       await browser("fill", ".editor textarea", "Compare with @dast");
-      await browser("wait", '[aria-label="Product directories"] [role="option"]');
+      await browser(
+        "wait",
+        "--fn",
+        `(() => { const row = document.querySelector(".product-mentions [role=option]"); return row?.textContent.includes("@dast-validation") && row.getBoundingClientRect().height > 0; })()`,
+      );
+      check(
+        (await page(`(() => {
+          const menu = document.querySelector(".product-mentions").getBoundingClientRect();
+          const editor = document.querySelector(".editor textarea").getBoundingClientRect();
+          return Math.abs(menu.left - editor.left) < 2 && Math.abs(menu.bottom - editor.top) < 2;
+        })()`)) === true,
+        "product picker did not open just above the composer",
+      );
       await capture("product-mention", home, origin);
       await browser("press", "Tab");
       const reference = `@dast-validation (product directory: ${dast})`;

@@ -147,7 +147,13 @@ export function ProductMentions() {
   return anchor && !directoryForm.value ? (
     <div
       class="product-mentions"
-      style={{ left: anchor.left, width: anchor.width, bottom: anchor.bottom }}
+      role="region"
+      aria-label="Product mentions"
+      style={{
+        "--mention-left": `${anchor.left}px`,
+        "--mention-width": `${anchor.width}px`,
+        "--mention-bottom": `${anchor.bottom}px`,
+      }}
     >
       <Menu
         label="Product directories"

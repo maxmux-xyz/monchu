@@ -1749,6 +1749,13 @@ p.offer {
 
 .product-mentions {
   position: fixed;
+  left: var(--mention-left);
+  width: var(--mention-width);
+  bottom: var(--mention-bottom);
   z-index: 6;
-  background: var(--bg);
+}
+.product-mentions .menu {
+  position: relative;
+  bottom: auto;
+  border: 1px solid var(--line);
 }
