@@ -271,7 +271,7 @@ function PushRow() {
   );
 }
 
-/** The menu, in place of the transcript like `/roots`. */
+/** The menu, in place of the transcript like `/threads`. */
 export function ClientPanel() {
   return (
     <Panel name="client" status={message.value}>

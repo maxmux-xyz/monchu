@@ -508,6 +508,24 @@ describe("Monchu end to end", { timeout: 120_000 }, () => {
       await writeFile(join(childInput.ownedDirectory, "plan.md"), "Existing plan.\n");
       await writeFile(join(childInput.ownedDirectory, "progress.md"), "");
       await head.submit(
+        `call propose_subthread ${JSON.stringify(childInput)}`,
+        "e2e:propose-child",
+        "followUp",
+      );
+      await waitFor(
+        () =>
+          headView.value.entries
+            .flatMap((entry) => entry.model ?? [])
+            .some(
+              (message) =>
+                message.role === "toolResult" &&
+                message.toolName === "propose_subthread" &&
+                !message.isError,
+            ),
+        30_000,
+      );
+      expect(sessions.some((item) => item.spawnedBy === headId)).toBe(false);
+      await head.submit(
         `call start_session ${JSON.stringify(childInput)}`,
         "e2e:spawn-child",
         "followUp",
@@ -533,7 +551,7 @@ describe("Monchu end to end", { timeout: 120_000 }, () => {
           () =>
             headView.value.entries
               .flatMap((entry) => entry.model ?? [])
-              .some((message) => textOf(message) === "Faux tool finished."),
+              .filter((message) => textOf(message) === "Faux tool finished.").length === 2,
           30_000,
         );
         expect(
@@ -543,6 +561,7 @@ describe("Monchu end to end", { timeout: 120_000 }, () => {
             .map(textOf),
         ).toEqual([
           "Faux reply: Plan the product.. Streaming stays above the editor. DONE",
+          "Faux tool finished.",
           "Faux tool finished.",
         ]);
         expect((await monchu.client.readDirectoryFile(child.id, "instruction.md")).text).toContain(
@@ -623,6 +642,33 @@ describe("Monchu end to end", { timeout: 120_000 }, () => {
         expect(
           (await monchu.client.listDirectory(child.id, "")).entries.map((entry) => entry.name),
         ).toContain("plan.md");
+        const branchInput = {
+          ...childInput,
+          name: "New design branch",
+          directoryType: "design" as const,
+          ownedDirectory: join(repoPath, "new-design"),
+          brief: "Review a new design.",
+        };
+        const branchOptions = { parent: headId, thinkingLevel: "off" as const };
+        const branched = await monchu.client.createSession(
+          branchInput,
+          "e2e:approved-branch",
+          branchOptions,
+        );
+        expect(
+          await monchu.client.createSession(branchInput, "e2e:approved-branch", branchOptions),
+        ).toBe(branched);
+        await waitFor(
+          () =>
+            sessions.some(
+              (item) =>
+                item.id === branched && item.spawnedBy === headId && !item.preparing && !item.error,
+            ),
+          30_000,
+        );
+        expect((await monchu.client.readDirectoryFile(branched, "instruction.md")).text).toContain(
+          branchInput.brief,
+        );
         const existing = await monchu.client.createRoot("e2e:assign-existing");
         const assignment = {
           ...headInput,
@@ -651,6 +697,157 @@ describe("Monchu end to end", { timeout: 120_000 }, () => {
       headView.dispose();
     }
   });
+
+  it.runIf(installed("git"))(
+    "isolates session checkouts at the selected branch and preserves them across retries, archive and restart",
+    async () => {
+      const sh = (cwd: string, command: string, args: string[]) => {
+        const result = spawnSync(command, args, { cwd, encoding: "utf8", shell: false });
+        if (result.status !== 0) throw new Error(`${command}: ${result.stderr}${result.stdout}`);
+        return result.stdout.trim();
+      };
+      let sessions: readonly RootSummary[] = [];
+      const stop = await monchu.client.watchRoots((value) => {
+        sessions = value;
+      });
+      const paths: { id: string; path: string }[] = [];
+      try {
+        for (const kind of ["git", ...(installed("jj") ? ["jj"] : [])]) {
+          const repoPath = join(monchu.home, `checkout-${kind}`);
+          await mkdir(repoPath);
+          sh(repoPath, "git", ["init", "--initial-branch=main"]);
+          await writeFile(join(repoPath, "example.txt"), "main version");
+          sh(repoPath, "git", ["add", "example.txt"]);
+          sh(repoPath, "git", [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main",
+          ]);
+          sh(repoPath, "git", ["checkout", "-b", "feature"]);
+          await writeFile(join(repoPath, "example.txt"), "feature version");
+          sh(repoPath, "git", ["add", "example.txt"]);
+          sh(repoPath, "git", [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature",
+          ]);
+          sh(repoPath, "git", ["checkout", "main"]);
+          if (kind === "jj") sh(repoPath, "jj", ["git", "init", "--colocate"]);
+          await writeFile(join(repoPath, "local-only.txt"), "keep source changes");
+          const ownedDirectory = join(monchu.home, `checkout-records-${kind}`);
+          const childDirectory = join(monchu.home, `checkout-child-${kind}`);
+          for (const path of [ownedDirectory, childDirectory]) {
+            await mkdir(path);
+            await writeFile(
+              join(path, "instruction.md"),
+              "# Isolated work\nReview the source checkout.\n",
+            );
+          }
+          const options = await monchu.client.checkoutBranches(repoPath);
+          expect(options.branches).toContain("feature");
+          const input = {
+            name: `Isolated ${kind}`,
+            agentRole: "head" as const,
+            directoryType: "task" as const,
+            repoPath,
+            codeDirectory: repoPath,
+            ownedDirectory,
+            worktree: { provider: options.provider, branch: "feature" },
+          };
+          const invalidDirectory = join(monchu.home, `checkout-invalid-${kind}`);
+          await mkdir(invalidDirectory);
+          await writeFile(join(invalidDirectory, "instruction.md"), "# Retry setup\n");
+          const recoveryCheckout = join(monchu.home, `checkout-recovery-${kind}`);
+          await mkdir(recoveryCheckout);
+          const failed = await monchu.client.createSession(
+            {
+              ...input,
+              ownedDirectory: invalidDirectory,
+              codeDirectory: recoveryCheckout,
+              worktree: { ...input.worktree, branch: "--help" },
+            },
+            `invalid-${kind}`,
+          );
+          await waitFor(() =>
+            sessions.some((item) => item.id === failed && item.error?.includes("starting branch")),
+          );
+          await monchu.client.retrySessionSetup(failed, true);
+          await waitFor(() =>
+            sessions.some((item) => item.id === failed && !item.preparing && !item.error),
+          );
+          expect(sessions.find((item) => item.id === failed)?.directory?.codeDirectory).toBe(
+            recoveryCheckout,
+          );
+          expect(
+            sessions.filter((item) => item.directory?.ownedDirectory === invalidDirectory),
+          ).toHaveLength(1);
+          const id = await monchu.client.createSession(input, `isolated-${kind}`);
+          expect(await monchu.client.createSession(input, `isolated-${kind}`)).toBe(id);
+          await waitFor(() => sessions.some((item) => item.id === id && item.status === "idle"));
+          const path = sessions.find((item) => item.id === id)?.directory?.codeDirectory;
+          if (path === undefined) throw new Error("No session checkout");
+          expect(path).not.toBe(repoPath);
+          expect(await readFile(join(path, "example.txt"), "utf8")).toBe("feature version");
+          expect(existsSync(join(path, "local-only.txt"))).toBe(false);
+          expect(await readFile(join(repoPath, "example.txt"), "utf8")).toBe("main version");
+          expect(await readFile(join(repoPath, "local-only.txt"), "utf8")).toBe(
+            "keep source changes",
+          );
+          const child = {
+            ...input,
+            name: `Isolated child ${kind}`,
+            agentRole: "worker",
+            ownedDirectory: childDirectory,
+          };
+          await monchu.client
+            .root(id)
+            .submit(
+              `call start_session ${JSON.stringify(child)}`,
+              `isolated-child-${kind}`,
+              "followUp",
+            );
+          await waitFor(
+            () =>
+              sessions.some((item) => item.label === child.name && !item.preparing && !item.error),
+            30_000,
+          );
+          const childPath = sessions.find((item) => item.label === child.name)?.directory
+            ?.codeDirectory;
+          if (childPath === undefined) throw new Error("No child checkout");
+          expect(childPath).not.toBe(path);
+          await writeFile(join(path, "example.txt"), "session changes");
+          expect(await readFile(join(childPath, "example.txt"), "utf8")).toBe("feature version");
+          await waitFor(() => sessions.some((item) => item.id === id && item.status === "idle"));
+          await monchu.client.archiveRoot(id, true);
+          expect(await readFile(join(path, "example.txt"), "utf8")).toBe("session changes");
+          await monchu.client.archiveRoot(id, false);
+          paths.push({ id, path });
+        }
+        await restart();
+        await waitFor(() =>
+          paths.every(({ id, path }) =>
+            sessions.some((item) => item.id === id && item.directory?.codeDirectory === path),
+          ),
+        );
+        for (const { path } of paths)
+          expect(await readFile(join(path, "example.txt"), "utf8")).toBe("session changes");
+      } finally {
+        stop();
+      }
+    },
+  );
 
   it("starts workers that report to the front, and messages, closes a batch or one from a client, reopens and stops them", async () => {
     const reports = count("Faux front: result received.");

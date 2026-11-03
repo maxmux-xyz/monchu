@@ -94,9 +94,9 @@ describe("slash argument completion", () => {
     ]);
     expect(argumentRows("/agents va", from)?.query).toBe("va");
     expect(
-      argumentRows("/roots ", from)?.items.find((item) => item.label === "kqzt"),
+      argumentRows("/threads ", from)?.items.find((item) => item.label === "kqzt"),
     ).toMatchObject({
-      id: "/roots kqzt",
+      id: "/threads kqzt",
       detail: "groceries",
     });
   });
@@ -106,8 +106,8 @@ describe("slash argument completion", () => {
       id: "/reply mnop ",
       detail: "sign off the plan?",
     });
-    expect(argumentRows("/roots ", from)?.items.find((item) => item.label === "rename")?.id).toBe(
-      "/roots rename ",
+    expect(argumentRows("/threads ", from)?.items.find((item) => item.label === "rename")?.id).toBe(
+      "/threads rename ",
     );
     expect(argumentRows("/pin ", from)?.items).toEqual([
       { id: "/pin qrst", label: "qrst", detail: "monchu: your outreach schedule" },

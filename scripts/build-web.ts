@@ -16,12 +16,12 @@ const SOURCE = join(ROOT, "src", "web");
 const OUT = join(ROOT, "dist", "web");
 const PLUGINS = join(ROOT, "src", "plugins");
 /** On-demand UI and plugin modules together, outside the startup script's budget. */
-const PAGES_BUDGET_GZIP_BYTES = 8 * 1024;
+const PAGES_BUDGET_GZIP_BYTES = 11 * 1024;
 /**
  * Chord's client host brings its whole runtime and TypeBox (about 80 KB gzip of the ~110); the rest is the app. The
  * service worker keeps the script, so it is fetched once per release.
  */
-const BUDGET_GZIP_BYTES = 142 * 1024;
+const BUDGET_GZIP_BYTES = 143 * 1024;
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });

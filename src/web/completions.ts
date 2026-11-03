@@ -30,7 +30,7 @@ function options(command: string, from: ArgSources): Row[] | undefined {
     case "/stop":
     case "/close":
       return words(from.workers, "worker");
-    case "/roots":
+    case "/threads":
       return [
         ...words(["new"], "start a root"),
         // These take more after them, so taking one leaves room for it.

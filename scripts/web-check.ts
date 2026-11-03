@@ -18,7 +18,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { gzipSync } from "node:zlib";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 
@@ -920,6 +920,118 @@ async function journeys(
   });
 
   if (WIDTH > 720)
+    await journey("worktree: choose a branch and resume an isolated checkout", async () => {
+      const original = text(await page(`new URLSearchParams(location.search).get('root')`));
+      const repoPath = join(home, "worktree-source");
+      const records = join(home, "worktree-records");
+      await mkdir(repoPath);
+      await mkdir(records);
+      const git = (args: string[]) => promisify(execFile)("git", ["-C", repoPath, ...args]);
+      await git(["init", "--initial-branch=main"]);
+      await writeFile(join(repoPath, "example.txt"), "main version");
+      await writeFile(join(records, "instruction.md"), "# Worktree task\nReview this checkout.\n");
+      await git(["add", "example.txt"]);
+      await git([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "main",
+      ]);
+      await git(["checkout", "-b", "feature"]);
+      await writeFile(join(repoPath, "example.txt"), "feature version");
+      await git(["add", "example.txt"]);
+      await git([
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-m",
+        "feature",
+      ]);
+      await git(["checkout", "main"]);
+      await browser("click", ".sessions header button:last-child");
+      await browser("wait", ".session-form");
+      await browser("fill", "input[name=name]", "Isolated task");
+      await browser("fill", "input[name=repoPath]", repoPath);
+      await browser("fill", "input[name=ownedDirectory]", records);
+      await browser("select", "select[name=directoryType]", "task");
+      await browser(
+        "wait",
+        "--fn",
+        `[...document.querySelector('select[name=branch]').options].some(option => option.value === 'feature')`,
+      ).catch(async (failure: unknown) => {
+        await capture("worktree-branch-error", home, origin);
+        throw failure;
+      });
+      check(
+        (await page(`document.querySelector('input[name=worktree]').checked`)) === true,
+        "new worktree isn't the default",
+      );
+      await browser("select", "select[name=branch]", "feature");
+      await capture("worktree-setup", home, origin);
+      await browser("click", "input[name=worktree]");
+      check(
+        (await page(`document.querySelector('select[name=branch]') === null`)) === true,
+        "branch remained active without a worktree",
+      );
+      await browser("click", "input[name=worktree]");
+      await browser(
+        "wait",
+        "--fn",
+        `[...document.querySelector('select[name=branch]').options].some(option => option.value === 'feature')`,
+      );
+      await browser("select", "select[name=branch]", "feature");
+      await browser("click", ".session-form button[type=submit]");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector('.session-form') && document.querySelector('.directory-document')?.textContent.includes('Review this checkout.')`,
+      );
+      await browser("wait", "--fn", SETTLED);
+      const id = text(await page(`new URLSearchParams(location.search).get('root')`));
+      await browser("reload");
+      await browser(
+        "wait",
+        "--fn",
+        `new URLSearchParams(location.search).get('root') === ${JSON.stringify(id)} && document.querySelector('.directory-document')?.textContent.includes('Review this checkout.')`,
+      );
+      const checkouts = (await readdir(join(home, "worktrees"))).filter((name) =>
+        name.startsWith("session-"),
+      );
+      check(checkouts.length === 1, "reload created another checkout");
+      const checkout = join(home, "worktrees", text(checkouts[0]));
+      check(
+        (await readFile(join(checkout, "example.txt"), "utf8")) === "feature version",
+        "the selected checkout is missing source files",
+      );
+      await writeFile(join(checkout, "example.txt"), "session change");
+      check(
+        (await readFile(join(repoPath, "example.txt"), "utf8")) === "main version",
+        "the session changed the shared checkout",
+      );
+      await capture("worktree-session", home, origin);
+      await browser("fill", ".editor textarea", "/threads");
+      await browser("press", "Enter");
+      await browser("wait", '.rootsMenu [aria-label="archive"]:not([disabled])');
+      await browser("click", '.rootsMenu [aria-label="archive"]');
+      check(
+        (await readFile(join(checkout, "example.txt"), "utf8")) === "session change",
+        "archive removed the checkout",
+      );
+      await browser("open", `${url}?root=${original}`);
+      await browser("wait", ".link[data-state=live]");
+      return "worktree defaults on; branch picker and toggle; source isolation; reload reuses checkout; archive preserves edits";
+    });
+
+  if (WIDTH > 720)
     await journey("directory: create, spawn, switch and reload desktop sessions", async () => {
       check(
         (await page(`document.querySelector('.session-repository') === null`)) === true,
@@ -928,10 +1040,16 @@ async function journeys(
       const original = text(await page(`new URLSearchParams(location.search).get("root")`));
       const repoPath = join(home, "coding-repo");
       await mkdir(join(repoPath, "product", "web-ui"), { recursive: true });
+      const productInstructions =
+        "# Web UI\nPlan the **desktop** product.\n\n" + "More product details.\n\n".repeat(60);
+      await writeFile(join(repoPath, "product", "web-ui", "instruction.md"), productInstructions);
       await writeFile(
-        join(repoPath, "product", "web-ui", "instruction.md"),
-        "# Web UI\nPlan the desktop product.\n",
+        join(repoPath, "product", "web-ui", "example.txt"),
+        "first line\nsecond line",
       );
+      const html =
+        '<!doctype html><style>body{font:20px sans-serif;color:#173b74}rect{fill:#c4dcff}</style><h1>Flowchart</h1><svg width="220" height="70" viewBox="0 0 220 70"><rect width="220" height="70"/><text x="18" y="40">Review → Ship</text></svg>';
+      await writeFile(join(repoPath, "product", "web-ui", "flow.html"), html);
       await mkdir(join(repoPath, "tasks", "in-progress", "agent-hierarchy"), { recursive: true });
       await writeFile(
         join(repoPath, "tasks", "in-progress", "agent-hierarchy", "instruction.md"),
@@ -942,6 +1060,9 @@ async function journeys(
         "Existing plan.\n",
       );
       await writeFile(join(repoPath, "tasks", "in-progress", "agent-hierarchy", "progress.md"), "");
+      const dast = join(repoPath, "product", "dast");
+      await mkdir(dast);
+      await writeFile(join(dast, "instruction.md"), "# DAST validation\n");
       await mkdir(join(repoPath, "design", "future"), { recursive: true });
       await writeFile(
         join(repoPath, "design", "future", "instruction.md"),
@@ -961,7 +1082,7 @@ async function journeys(
       await browser(
         "wait",
         "--fn",
-        `document.querySelectorAll('.directory-catalog li').length===3`,
+        `document.querySelectorAll('.directory-catalog li').length===4`,
       );
       await capture("directory-catalog", home, origin);
       await page(
@@ -969,6 +1090,7 @@ async function journeys(
       );
       await browser("wait", ".session-form");
       await browser("fill", "input[name=name]", "Web UI");
+      await browser("click", "input[name=worktree]");
       await browser("fill", "input[name=repoPath]", home);
       await browser("click", '[aria-label="Browse Repository"]');
       await browser("wait", ".folder-picker li button");
@@ -1091,6 +1213,232 @@ async function journeys(
         )) === true,
         "desktop panes overlap or files are missing",
       );
+      const initialTreeWidth = Number(
+        await page(`document.querySelector('.sessions').clientWidth`),
+      );
+      const dividerX = String(
+        Math.round(
+          Number(
+            await page(
+              `document.querySelector('[aria-label="Resize sessions"]').getBoundingClientRect().x + 4`,
+            ),
+          ),
+        ),
+      );
+      const dividerY = String(
+        Math.round(
+          Number(
+            await page(
+              `document.querySelector('[aria-label="Resize sessions"]').getBoundingClientRect().y + 100`,
+            ),
+          ),
+        ),
+      );
+      await browser("mouse", "move", dividerX, dividerY);
+      await browser("mouse", "down");
+      await browser("mouse", "move", String(Number(dividerX) + 100), dividerY);
+      await browser("mouse", "up");
+      check(
+        Number(await page(`document.querySelector('.sessions').clientWidth`)) >
+          initialTreeWidth + 90,
+        "dragging the session divider did not resize the tree",
+      );
+      await browser("focus", '[aria-label="Resize sessions"]');
+      await browser("press", "ArrowLeft");
+      const resizedTreeWidth = Number(
+        await page(`document.querySelector('.sessions').clientWidth`),
+      );
+      check(resizedTreeWidth < initialTreeWidth + 90, "keyboard resizing did not narrow the tree");
+      const chatWidth = Number(await page(`document.querySelector('.chat-pane').clientWidth`));
+      await browser("click", '[aria-label="Hide sessions"]');
+      check(
+        (await page(
+          `getComputedStyle(document.querySelector('.sessions')).display === 'none' && document.querySelector('.chat-pane').clientWidth > ${chatWidth} + 190 && document.querySelector('.directory-files').clientWidth > 250`,
+        )) === true,
+        "collapsing the tree did not give its space to chat and keep files visible",
+      );
+      await capture("sessions-collapsed", home, origin);
+      await browser("click", '[aria-label="Show sessions"]');
+      check(
+        Math.abs(
+          Number(await page(`document.querySelector('.sessions').clientWidth`)) - resizedTreeWidth,
+        ) <= 1,
+        "restoring the tree lost its chosen width",
+      );
+      await capture("sessions-resized", home, origin);
+      const documentation = '[aria-label="Resize documentation"]';
+      const filesWidth = () =>
+        page("document.querySelector('.directory-files').clientWidth").then(Number);
+      const before = await filesWidth();
+      const x = Number(
+        await page(
+          `Math.round(document.querySelector(${JSON.stringify(documentation)}).getBoundingClientRect().left + 4)`,
+        ),
+      );
+      await browser("mouse", "move", String(x), dividerY);
+      await browser("mouse", "down");
+      await browser("mouse", "move", String(x - 96), dividerY);
+      await browser("mouse", "up");
+      check((await filesWidth()) > before + 90, "dragging left did not widen documentation");
+      await browser("focus", documentation);
+      await browser("press", "ArrowRight");
+      check((await filesWidth()) < before + 90, "pressing right did not narrow documentation");
+      await capture("documentation-resized", home, origin);
+
+      const selectProduct = `(() => {
+        document.querySelector('.editor textarea')?.blur();
+        const range = document.createRange();
+        range.selectNodeContents(document.querySelector('.directory-document p:not(.h)'));
+        const selected = getSelection(); selected.removeAllRanges(); selected.addRange(range);
+      })()`;
+      const sentBeforeQuote = Number(
+        await page(`document.querySelectorAll('.transcript .user').length`),
+      );
+      await browser("fill", ".editor textarea", "What does this cover?");
+      await page(selectProduct);
+      await browser("wait", ".directory-ask");
+      check(
+        (await page(
+          `(() => { const button = document.querySelector('.directory-ask').getBoundingClientRect(); const pane = document.querySelector('.directory-files').getBoundingClientRect(); return button.top >= pane.top && button.bottom <= pane.bottom; })()`,
+        )) === true,
+        "the selection action is offscreen in a long file",
+      );
+      await capture("file-selection", home, origin);
+      await browser("click", ".directory-ask");
+      const quotedQuestion = `From ${join(repoPath, "product", "web-ui", "instruction.md")}:\n> Plan the desktop product.\n\nWhat does this cover?`;
+      check(
+        (await page(`document.querySelector('.editor textarea').value`)) === quotedQuestion &&
+          (await page(`document.activeElement === document.querySelector('.editor textarea')`)) ===
+            true &&
+          Number(await page(`document.querySelectorAll('.transcript .user').length`)) ===
+            sentBeforeQuote,
+        "a file quote lost the existing draft, its exact rendered text or source, or sent without the user",
+      );
+      await capture("file-quote-draft", home, origin);
+      await browser("press", "Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `[...document.querySelectorAll('.assistant:not(.live)')].some(item=>item.textContent.includes('What does this cover?') && item.textContent.includes('DONE'))`,
+      );
+      check(
+        (await page(
+          `[...document.querySelectorAll('.transcript .user')].at(-1)?.textContent.includes(${JSON.stringify(quotedQuestion.trim())})`,
+        )) === true &&
+          (await page(
+            `[...document.querySelectorAll('.transcript .assistant')].at(-1)?.textContent.includes('Plan the desktop product.')`,
+          )) === true,
+        "the selected agent did not receive the annotated file quote",
+      );
+      await capture("file-quote-sent", home, origin);
+      await page(selectProduct);
+      await browser("wait", ".directory-ask");
+      await page(
+        `(() => { const range = document.createRange(); range.selectNodeContents(document.querySelector('.transcript .user')); const selected = getSelection(); selected.removeAllRanges(); selected.addRange(range); })()`,
+      );
+      await browser("wait", "--fn", `!document.querySelector('.directory-ask')`);
+      await browser("fill", ".editor textarea", "/model");
+      await browser("press", "Enter");
+      await browser("wait", ".pick li");
+      await page(selectProduct);
+      await browser("wait", ".directory-ask");
+      await browser("click", ".directory-ask");
+      check(
+        (await page(
+          `!!document.querySelector('.pick') && document.querySelector('.editor textarea').value === ''`,
+        )) === true,
+        "a file quote overwrote the model picker input",
+      );
+      await browser("focus", ".editor textarea");
+      await browser("press", "Escape");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector('.pick') && document.querySelector('.editor textarea')?.getAttribute('aria-label') === 'message'`,
+      );
+      const shell = await fetch(new URL("/file-preview.html", url), { redirect: "manual" });
+      check(
+        shell.ok && shell.headers.get("x-frame-options") === "SAMEORIGIN",
+        "the static HTML preview shell could not load without a login cookie",
+      );
+      await page(
+        `[...document.querySelectorAll(".directory-list button")].find(row=>row.textContent==="flow.html").click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `(() => {const frame = document.querySelector(".html-preview")?.contentDocument?.querySelector("iframe"); return frame?.srcdoc.includes("Review → Ship") && frame.getAttribute("sandbox") === "allow-same-origin" && frame.contentDocument?.URL === "about:srcdoc";})()`,
+      );
+      await browser("fill", ".editor textarea", "What happens here?");
+      await page(`(() => {
+        const frame = document.querySelector(".html-preview").contentDocument.querySelector("iframe");
+        frame.contentWindow.focus();
+        const doc = frame.contentDocument;
+        const range = doc.createRange();
+        range.selectNodeContents(doc.querySelector("svg text"));
+        doc.getSelection().addRange(range);
+      })()`);
+      await browser("wait", ".directory-ask");
+      await browser("press", "Alt+Enter");
+      check(
+        (await page(`document.querySelector(".editor textarea").value`)) ===
+          `From ${join(repoPath, "product", "web-ui", "flow.html")}:\n> Review → Ship\n\nWhat happens here?`,
+        "HTML selection did not quote the rendered text and path into the current draft",
+      );
+      await browser("fill", ".editor textarea", "");
+      await normalize(home, origin);
+      await browser("screenshot", join(OUT, "directory-html.png"));
+      const beforeTabs = list((await browser("tab", "list")).tabs);
+      await browser("dblclick", ".directory-list button.on");
+      const afterTabs = list((await browser("tab", "list")).tabs);
+      const tab = afterTabs.find(
+        (item) =>
+          isData(item) &&
+          !beforeTabs.some((previous) => isData(previous) && previous.tabId === item.tabId),
+      );
+      if (!isData(tab)) throw new Error("Double-click did not open a browser tab");
+      await browser("tab", text(tab.tabId));
+      await browser(
+        "wait",
+        "--fn",
+        `(() => {const frame = document.querySelector("iframe")?.contentDocument?.querySelector("iframe"); return document.title === "flow.html" && window.opener === null && frame?.srcdoc.includes("Review → Ship") && frame.contentDocument === null;})()`,
+      );
+      await browser("screenshot", join(OUT, "directory-html-tab.png"));
+      await browser("tab", "close");
+      const originalTab = beforeTabs[0];
+      if (isData(originalTab)) await browser("tab", text(originalTab.tabId));
+      await browser("click", ".html-preview-controls button:nth-child(2)");
+      check(
+        (await page(`document.querySelector(".file-preview pre")?.textContent`)) === html,
+        "HTML source differs from the file",
+      );
+      await capture("directory-html-source", home, origin);
+      await page(
+        `[...document.querySelectorAll('.directory-list button')].find(row=>row.textContent==='example.txt').click()`,
+      );
+      await browser("wait", ".directory-document pre");
+      await page(
+        `(() => { const range = document.createRange(); range.selectNodeContents(document.querySelector('.directory-document pre')); const selected = getSelection(); selected.removeAllRanges(); selected.addRange(range); })()`,
+      );
+      await browser("wait", ".directory-ask");
+      await browser("click", ".directory-ask");
+      await capture("file-plain-quote", home, origin);
+      check(
+        (await page(`document.querySelector('.editor textarea').value`)) ===
+          `From ${join(repoPath, "product", "web-ui", "example.txt")}:\n> first line\n> second line\n\n`,
+        "plain-text selection lost its line breaks or source file",
+      );
+      await browser("fill", ".editor textarea", "");
+      await page(
+        `[...document.querySelectorAll('.directory-list button')].find(row=>row.textContent==='instruction.md').click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector('.directory-document')?.textContent.includes('Plan the desktop product.')`,
+      );
+      await page(selectProduct);
+      await browser("wait", ".directory-ask");
       const child = {
         name: "Agent hierarchy",
         brief: "Plan the session tree.",
@@ -1100,25 +1448,43 @@ async function journeys(
         codeDirectory: repoPath,
         ownedDirectory: join(repoPath, "tasks", "in-progress", "agent-hierarchy"),
       };
-      await browser("fill", ".editor textarea", `call start_session ${JSON.stringify(child)}`);
+      await browser("fill", ".editor textarea", `call propose_subthread ${JSON.stringify(child)}`);
       await browser("press", "Enter");
+      await browser("wait", ".transcript .card button");
+      check(
+        (await page(
+          `![...document.querySelectorAll(".session-row")].some(row=>row.textContent.includes("agent-hierarchy - task"))`,
+        )) === true,
+        "proposal started a child before approval",
+      );
+      await browser("click", ".transcript .card button");
+      await browser("wait", '[aria-label="Open subthread"]');
+      check(
+        (await page(`document.querySelector('[name="brief"]').value`)) === child.brief,
+        "proposal did not seed the prompt",
+      );
+      await browser("click", '[name="worktree"]');
+      await browser("click", '.session-form button[type="submit"]');
       await browser(
         "wait",
         "--fn",
-        `[...document.querySelectorAll('.session-row')].some(row=>row.textContent.includes('Agent hierarchy - task'))`,
+        `[...document.querySelectorAll('.session-row')].some(row=>row.textContent.includes('agent-hierarchy - task'))`,
       ).catch(async (error: unknown) => {
         await capture("directory-spawn-failed", home, origin);
         throw error;
       });
       check(
         (await page(
-          `[...document.querySelectorAll('.sessions > ul > li > ul .session-row')].some(row=>row.textContent.includes('Agent hierarchy - task'))`,
+          `[...document.querySelectorAll('.sessions > ul > li > ul .session-row')].some(row=>row.textContent.includes('agent-hierarchy - task'))`,
         )) === true,
         "spawned session isn't nested beneath its parent",
       );
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('web-ui - product')).click()`,
+      );
       await browser("fill", ".editor textarea", "Keep product draft");
       await page(
-        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('Agent hierarchy - task')).click()`,
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('agent-hierarchy - task')).click()`,
       );
       await browser(
         "wait",
@@ -1126,7 +1492,8 @@ async function journeys(
         `document.querySelector('.directory-path')?.textContent.includes('agent-hierarchy')`,
       );
       check(
-        (await page(`document.querySelector('.editor textarea').value`)) === "",
+        (await page(`document.querySelector('.editor textarea').value`)) === "" &&
+          (await page(`document.querySelector('.directory-ask') === null`)) === true,
         "parent draft leaked into child",
       );
       await browser("fill", ".editor textarea", "Keep task draft");
@@ -1140,7 +1507,7 @@ async function journeys(
         `document.querySelector('.directory-filename')?.textContent==='progress.md'`,
       );
       await page(
-        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('Web UI - product')).click()`,
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('web-ui - product')).click()`,
       );
       await browser(
         "wait",
@@ -1169,7 +1536,7 @@ async function journeys(
         "sessions disappeared after reload",
       );
       await page(
-        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('Agent hierarchy - task')).click()`,
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('agent-hierarchy - task')).click()`,
       );
       await browser(
         "wait",
@@ -1204,8 +1571,200 @@ async function journeys(
       );
       check(
         (await readFile(join(repoPath, "product", "web-ui", "instruction.md"), "utf8")) ===
-          "# Web UI\nPlan the desktop product.\n",
+          productInstructions,
         "opening the directory rewrote its instructions",
+      );
+      const childNote = "HUMAN_PRIVATE_CHILD /model stays here\nconst example = '<private>';\n";
+      const headNote = "HUMAN_PRIVATE_HEAD\nReview questions and pasted links.";
+      const sentBeforeNotes = Number(
+        await page(`document.querySelectorAll(".transcript .user").length`),
+      );
+      await browser("click", ".directory-tabs button:nth-child(2)");
+      await browser("wait", ".human-notes textarea");
+      check(
+        (await page(`document.querySelector('.directory-ask') === null`)) === true,
+        "human notes expose a quote action",
+      );
+      check(
+        (await page(`document.querySelector(".human-notes textarea").value`)) === "",
+        "a new agent inherited another scratchpad",
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector("#human-notes-status")?.textContent === "Saved"`,
+      );
+      await page(
+        `window.noteSaveStates = []; window.noteObserver = new MutationObserver(() => window.noteSaveStates.push(document.querySelector("#human-notes-status")?.textContent)); window.noteObserver.observe(document.querySelector("#human-notes-status"), {childList:true, subtree:true, characterData:true});`,
+      );
+      await browser("fill", ".human-notes textarea", childNote);
+      await browser("press", "Enter");
+      const childSaved = childNote + "\n";
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector("#human-notes-status")?.textContent === "Saved"`,
+      );
+      check(
+        (await page(
+          `window.noteSaveStates.includes("Saving…") && window.noteSaveStates.includes("Saved")`,
+        )) === true,
+        "notes did not show Saving and Saved around the server write",
+      );
+      await page(`window.noteObserver.disconnect()`);
+      check(
+        (await page(`document.querySelector(".human-notes textarea").value`)) === childSaved,
+        "Enter in human notes did not add a line",
+      );
+      check(
+        (await page(`document.querySelectorAll(".transcript .user").length`)) === sentBeforeNotes &&
+          (await page(`document.querySelector(".editor textarea").value`)) === "",
+        "human notes entered the chat",
+      );
+      check(
+        (await page(
+          `(() => { const data = new DataTransfer(); data.items.add(new File(["human-only"], "private.txt")); const event = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }); document.querySelector(".human-notes textarea").dispatchEvent(event); return !event.defaultPrevented; })()`,
+        )) === true,
+        "pasted files reached the chat attachment handler",
+      );
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('web-ui - product')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `new URLSearchParams(location.search).get('root')===${JSON.stringify(head)} && document.querySelector(".human-notes textarea")?.value === ""`,
+      );
+      await browser("fill", ".human-notes textarea", headNote);
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('agent-hierarchy - task')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".human-notes textarea")?.value === ${JSON.stringify(childSaved)}`,
+      );
+      await browser("click", ".directory-tabs button:first-child");
+      await browser("wait", ".directory-document");
+      await browser("click", ".directory-tabs button:nth-child(2)");
+      check(
+        (await page(`document.querySelector(".human-notes textarea").value`)) === childSaved,
+        "switching the right pane lost notes",
+      );
+      await page(`localStorage.clear()`);
+      await browser("reload");
+      await browser("wait", ".directory-document");
+      await browser("click", ".directory-tabs button:nth-child(2)");
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".human-notes textarea")?.value === ${JSON.stringify(childSaved)} && document.querySelector("#human-notes-status")?.textContent === "Saved"`,
+      );
+      await server.stop();
+      await browser("wait", "--fn", `document.querySelector('.link')?.dataset.state !== 'live'`);
+      await server.start();
+      await browser("wait", "--fn", `document.querySelector('.link')?.dataset.state === 'live'`);
+      await browser("reload");
+      await browser("wait", ".directory-document");
+      await browser("click", ".directory-tabs button:nth-child(2)");
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".human-notes textarea")?.value === ${JSON.stringify(childSaved)} && document.querySelector("#human-notes-status")?.textContent === "Saved"`,
+      );
+      check(
+        (await page(
+          `document.querySelector(".transcript").textContent.includes("HUMAN_PRIVATE")`,
+        )) === false,
+        "human notes leaked into the agent conversation",
+      );
+      check(
+        !(await readFile(join(repoPath, "product", "web-ui", "instruction.md"), "utf8")).includes(
+          "HUMAN_PRIVATE",
+        ),
+        "human notes were written into owned files",
+      );
+      await capture("human-notes", home, origin);
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('web-ui - product')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".human-notes textarea")?.value === ${JSON.stringify(headNote)}`,
+      );
+      await page(
+        `[...document.querySelectorAll('.session-row')].find(row=>row.textContent.includes('agent-hierarchy - task')).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelector(".human-notes textarea")?.value === ${JSON.stringify(childSaved)}`,
+      );
+      await browser("click", ".directory-tabs button:first-child");
+      await browser("wait", ".directory-document");
+      await browser("fill", ".editor textarea", "/model faux/front");
+      await browser("press", "Enter");
+      await browser("wait", ".pick [role=option]");
+      await browser("click", '[aria-label="Make default for workers"]');
+      await browser("press", "Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("model · faux/front · saved as worker default")`,
+      );
+      const saved: unknown = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
+      check(
+        isData(saved) &&
+          isData(saved.front) &&
+          saved.front.modelId === "front" &&
+          isData(saved.worker) &&
+          saved.worker.modelId === "front",
+        "a worker session saved to the wrong role default",
+      );
+      await browser("fill", ".editor textarea", "/model faux/worker");
+      await browser("press", "Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `document.querySelectorAll(".pick [role=option]").length === 1 && document.querySelector(".pick [role=option] b")?.textContent === "faux/worker"`,
+      );
+      await browser("press", "Shift+Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("model · faux/worker · saved as worker default")`,
+      );
+      const childRow = `[...document.querySelectorAll(".session-row")].find(row=>row.textContent.includes("agent-hierarchy - task"))`;
+      await browser("fill", ".editor textarea", `busy ${"x".repeat(1600)}`);
+      await browser("press", "Enter");
+      await browser("wait", "--fn", `!!${childRow}?.querySelector(".session-running")`);
+      await page(
+        `[...document.querySelectorAll(".session-row")].find(row=>row.textContent.includes("web-ui - product")).click()`,
+      );
+      await browser(
+        "wait",
+        "--fn",
+        `!!${childRow}?.querySelector(".session-unread") && !${childRow}?.querySelector(".session-running")`,
+      );
+      await capture("directory-unread", home, origin);
+      await page(`${childRow}.click()`);
+      await browser("wait", "--fn", `!${childRow}?.querySelector(".session-unread")`);
+      await browser("fill", ".editor textarea", "Compare with @dast");
+      await browser("wait", '[aria-label="Product directories"] [role="option"]');
+      await capture("product-mention", home, origin);
+      await browser("press", "Tab");
+      const reference = `@dast-validation (product directory: ${dast})`;
+      check(
+        (await page(`document.querySelector(".editor textarea").value`)) ===
+          `Compare with ${reference} `,
+        "product completion did not resolve the unowned directory",
+      );
+      await browser("press", "Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `[...document.querySelectorAll(".assistant:not(.live)")].some(row=>row.textContent.includes(${JSON.stringify(reference)}))`,
       );
       await browser("open", `${url}?root=${original}`);
       await browser(
@@ -1213,7 +1772,7 @@ async function journeys(
         "--fn",
         `document.querySelector('.transcript')?.textContent.includes('/help')`,
       );
-      return "all directories, including ones without agents; open existing instructions without assignment or file changes; resume live agents; chat spawning, drafts, file selection and reload preserve sessions";
+      return "all directories, including ones without agents; open existing instructions without assignment or file changes; resume live agents; chat spawning, drafts, file selection and reload preserve sessions; human notes stay separate per session, show server save status, restore after browser storage is cleared and server restarts, and never enter chat";
     });
 
   await journey(
@@ -1303,6 +1862,13 @@ async function journeys(
       )) === true,
       "idle composer still has an action row",
     );
+    await page(`document.querySelector(".editor textarea").blur()`);
+    await browser("click", ".transcript");
+    await browser("press", "a");
+    check(
+      (await page(`document.querySelector(".editor textarea").value`)) === "a",
+      "clicking the transcript did not let typing reach the message box",
+    );
     await browser("fill", ".editor textarea", "first line");
     await browser("press", "Shift+Enter");
     check(
@@ -1337,6 +1903,25 @@ async function journeys(
     );
     await capture("composer", home, origin);
     return "no idle action row; Enter sends, Shift+Enter adds a line, and Stop appears inline only while working";
+  });
+
+  await journey("markdown-draft: format while typing without changing the draft", async () => {
+    const draft = "**Review**\n\n```sh\nbun install\n```";
+    const touch = await touchScreen();
+    try {
+      await browser("fill", ".editor textarea", draft);
+      check(
+        (await page(
+          `document.querySelector(".draft-format strong")?.textContent === "**Review**" && document.querySelector(".draft-format code")?.textContent.includes("bun install") && document.querySelector(".editor textarea").value === ${JSON.stringify(draft)} && document.activeElement.matches(".editor textarea")`,
+        )) === true,
+        "inline Markdown did not render bold and code or disrupted editing",
+      );
+      await capture("markdown-draft", home, origin);
+    } finally {
+      touch.close();
+      await browser("fill", ".editor textarea", "");
+    }
+    return "formatted bold and fenced code automatically with the raw draft intact";
   });
 
   await journey("send: a message gets its streamed reply", async () => {
@@ -1762,6 +2347,25 @@ async function journeys(
         "--fn",
         `[...document.querySelectorAll(".assistant:not(.live)")].some((item) => item.textContent.includes("Faux tool finished"))`,
       );
+      const activity = `document.querySelector(".transcript .activity:has(.tool)")`;
+      check(
+        (await page(
+          `!${activity}.open && ${activity}.querySelector("summary").textContent.includes("1 tool call") && ${activity}.querySelector("summary .failed")?.textContent.includes("1 failed")`,
+        )) === true,
+        "turn activity isn't summarized and folded",
+      );
+      await capture("activity", home, origin);
+      const touch = await touchScreen();
+      try {
+        check(
+          (await page('matchMedia("(pointer: coarse)").matches')) === true,
+          "touch emulation is off",
+        );
+        await browser("click", ".activity:has(.tool) > summary");
+        check((await page(`${activity}.open`)) === true, "activity didn't open");
+      } finally {
+        touch.close();
+      }
       const tool = `document.querySelector(".transcript .tool")`;
       check(
         (await page(
@@ -1769,26 +2373,13 @@ async function journeys(
         )) === true,
         "the tool call isn't folded to one line",
       );
-      check(
-        (await page(
-          `(() => { const left = (item) => item.getBoundingClientRect().left + parseFloat(getComputedStyle(item).borderLeftWidth) + parseFloat(getComputedStyle(item).paddingLeft); return left(${tool}) === left(document.querySelector(".transcript .user")); })()`,
-        )) === true,
-        "the tool row's text doesn't line up with a message's",
-      );
       await capture("tool", home, origin);
       await page(`${tool}.querySelector(".row").click()`);
       check((await page(`!!${tool}.querySelector("pre")`)) === true, "a tap doesn't open the call");
       await page(`${tool}.querySelector(".row").click()`);
       check((await page(`!${tool}.querySelector("pre")`)) === true, "a second tap doesn't fold it");
-      // Expand all and back folds a call opened by hand too.
-      const expandAll = `document.querySelector("[aria-label='expand all']").click()`;
-      await page(`${tool}.querySelector(".row").click()`);
-      await page(expandAll);
-      await page(expandAll);
-      check(
-        (await page(`!${tool}.querySelector("pre")`)) === true,
-        "expand all and back didn't fold the call opened by hand",
-      );
+      await page(`${activity}.querySelector("summary").click()`);
+      check((await page(`!${activity}.open`)) === true, "a second tap doesn't fold activity");
       // An image a tool returns, a screenshot say, shows under its folded row.
       const image = join(home, "tool-check.png");
       await writeFile(image, await gradientPng(240, 140));
@@ -1803,8 +2394,9 @@ async function journeys(
         (await page(`!document.querySelector(".transcript .tool:has(.attached) pre")`)) === true,
         "the image's call isn't folded",
       );
+      await page(`document.querySelector(".activity:has(.attached) > summary").click()`);
       await capture("tool-image", home, origin);
-      return "folded to one line, aligned with the messages, opened and folded by tap and by expand all; a returned image shows under its row";
+      return "turn activity and tool calls fold independently; a returned image shows under its row";
     },
   );
 
@@ -1841,8 +2433,10 @@ async function journeys(
       "/model opened the target menu instead of the model list",
     );
     check(
-      (await page(`document.querySelector('.keys .alternate') === null`)) === true,
-      "the session model picker offers to save a role default",
+      (await page(
+        `document.querySelector('.keys .alternate')?.getAttribute("aria-pressed") === "false"`,
+      )) === true,
+      "the model picker saves defaults without opting in",
     );
     await capture("model", home, origin);
     // The editor's box filters the pick in place, and the draft waits under it.
@@ -1865,11 +2459,6 @@ async function journeys(
     check(
       (await page(`document.querySelectorAll(".pick [role=option]").length`)) === 1,
       "/model search did not filter the model list",
-    );
-    await browser("press", "Shift+Enter");
-    check(
-      (await page(`document.querySelector(".pick") !== null`)) === true,
-      "Shift+Enter saved a role default from the session picker",
     );
     await browser("press", "Enter");
     await browser(
@@ -1895,7 +2484,36 @@ async function journeys(
     await browser("fill", "textarea", "faux/front");
     await browser("press", "Enter");
     await browser("wait", "--fn", `!document.querySelector(".pick")`);
-    return "model list opened directly for this session, filtered, cancelled, selected without changing defaults, and kept through reload";
+    await browser("fill", "textarea", "/model faux/worker");
+    await browser("press", "Enter");
+    await browser("wait", ".pick [role=option]");
+    await browser("click", '[aria-label="Make default for heads"]');
+    await capture("model-default", home, origin);
+    await browser("press", "Enter");
+    await browser(
+      "wait",
+      "--fn",
+      `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("model · faux/worker · saved as head default")`,
+    );
+    const saved: unknown = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
+    check(
+      isData(saved) &&
+        isData(saved.front) &&
+        saved.front.modelId === "worker" &&
+        isData(saved.worker) &&
+        saved.worker.modelId === "worker",
+      "Make default did not save the head model separately",
+    );
+    await browser("fill", "textarea", "/model faux/front");
+    await browser("press", "Enter");
+    await browser("wait", ".pick [role=option]");
+    await browser("press", "Shift+Enter");
+    await browser(
+      "wait",
+      "--fn",
+      `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("model · faux/front · saved as head default")`,
+    );
+    return "direct model picker; session-only choices survive reload without saving defaults; Make default and Shift+Enter save only the head role";
   });
 
   await journey(
@@ -1907,7 +2525,7 @@ async function journeys(
       await browser("wait", ".pick [role=option]");
       check(
         (await page(
-          `document.querySelector(".pick header").textContent.startsWith("Thinking level ·") && document.querySelector(".keys .alternate") === null`,
+          `document.querySelector(".pick header").textContent.startsWith("Thinking level ·") && document.querySelector(".keys .alternate")?.getAttribute("aria-pressed") === "false"`,
         )) === true,
         "/thinking opened a target or saved-default picker",
       );
@@ -1934,9 +2552,19 @@ async function journeys(
         )) === true,
         "the thinking pick did not survive reload",
       );
-      await browser("press", "Escape");
-      await browser("wait", "--fn", `!document.querySelector(".pick")`);
-      return "thinking levels opened directly, applied only to the current session, and persisted through reload";
+      await browser("click", '[aria-label="Make default for heads"]');
+      await browser("press", "Enter");
+      await browser(
+        "wait",
+        "--fn",
+        `!document.querySelector(".pick") && document.querySelector(".transcript")?.textContent.includes("thinking · ${level} · saved as head default")`,
+      );
+      const saved: unknown = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
+      check(
+        isData(saved) && isData(saved.front) && saved.front.thinkingLevel === level,
+        "Make default did not save the thinking level",
+      );
+      return "direct thinking picker; session choices leave defaults untouched; Make default saves the head thinking level";
     },
   );
 
@@ -2094,7 +2722,7 @@ async function journeys(
       const rows = `document.querySelectorAll(".rootsMenu li[role=option]")`;
       const first = await shownRoot();
       check(first !== "", "the address doesn't name the shown root");
-      await browser("fill", "textarea", "/roots");
+      await browser("fill", "textarea", "/threads");
       await browser("press", "Enter");
       await browser("wait", ".rootsMenu li[role=option]");
       await capture("roots-one", home, origin);
@@ -2102,7 +2730,7 @@ async function journeys(
         (await page(`document.querySelector(".rootsMenu li").matches(".here.selected")`)) === true,
         "the shown root isn't first and selected",
       );
-      await page(`document.querySelector(".editor .line [aria-label='new root']").click()`);
+      await page(`document.querySelector(".editor .line [aria-label='new thread']").click()`);
       await browser(
         "wait",
         "--fn",
@@ -2176,7 +2804,7 @@ async function journeys(
       );
       check((await shownRoot()) === second, "the reload didn't come back to the same root");
       // Keys: Esc to normal mode, j to the other root, Space then a archives it.
-      await browser("fill", "textarea", "/roots");
+      await browser("fill", "textarea", "/threads");
       await browser("press", "Enter");
       await browser("wait", ".rootsMenu li[role=option]");
       await browser("press", "Escape");
@@ -3175,6 +3803,56 @@ async function journeys(
       }
     },
   );
+  await journey("chat-quote: ask about part of an answer in the current thread", async () => {
+    const excerpt = "the selected phrase";
+    const question = "What does it mean?";
+    const textarea = '.editor textarea[aria-label="message"]';
+    const urlBefore = text((await browser("get", "url")).url);
+    await browser("fill", textarea, `Before ${excerpt} after`);
+    await browser("press", "Enter");
+    const answer = `[...document.querySelectorAll('.assistant:not(.live) > .md')].findLast(item => item.textContent.includes(${JSON.stringify(excerpt)}))`;
+    await browser("wait", "--fn", `!!(${answer})`);
+    await browser("fill", textarea, question);
+    const count = await page("document.querySelectorAll('.transcript .user').length");
+    await page(`(() => {
+      document.querySelector('.editor textarea').blur();
+      const walker = document.createTreeWalker(${answer}, NodeFilter.SHOW_TEXT);
+      const excerpt = ${JSON.stringify(excerpt)};
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const start = node.textContent.indexOf(excerpt);
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, start + excerpt.length);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        return;
+      }
+      throw new Error("Missing excerpt");
+    })()`);
+    await browser("wait", ".chat-ask");
+    await capture("chat-selection", home, origin);
+    await browser("press", "Alt+Enter");
+    const expected = `From the answer:\n> ${excerpt}\n\n${question}`;
+    await browser(
+      "wait",
+      "--fn",
+      `document.querySelector(${JSON.stringify(textarea)}).value === ${JSON.stringify(expected)}`,
+    );
+    check(
+      (await page("document.querySelectorAll('.transcript .user').length")) === count &&
+        text((await browser("get", "url")).url) === urlBefore,
+      "quoting sent a message or changed threads",
+    );
+    await browser("press", "Enter");
+    await browser(
+      "wait",
+      "--fn",
+      `[...document.querySelectorAll('.transcript .user')].at(-1)?.textContent.includes(${JSON.stringify(expected)})`,
+    );
+    return "quoted only the selected passage, kept the draft, and sent the follow-up in the same thread";
+  });
 }
 
 /** Lower is better for every metric; a regression is past noise for its kind. */

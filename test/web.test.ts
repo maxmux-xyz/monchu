@@ -439,19 +439,15 @@ describe("web server", () => {
     const provider = await identityProvider();
     const { home, backend, host: core } = await openCore();
     const port = await freePort();
-    const site = await serveWeb(
-      ingress(core),
-      backend,
-      {
-        port,
-        bind: "127.0.0.1",
-        host: { name: "monchu.example.test", https: true },
-        access: { teamDomain: provider.issuer, audience: "aud-1", subjectClaim: "sub" },
-        oidc: undefined,
-        allow: ["sub:user-1", "service:svc-1"],
-      },
-      {},
-    );
+    const config: WebConfig = {
+      port,
+      bind: "127.0.0.1",
+      host: { name: "monchu.example.test", https: true },
+      access: { teamDomain: provider.issuer, audience: "aud-1", subjectClaim: "sub" },
+      oidc: undefined,
+      allow: ["sub:user-1", "service:svc-1"],
+    };
+    const site = await serveWeb(ingress(core), backend, config, {});
     try {
       const person = {
         host: "monchu.example.test",
@@ -494,6 +490,80 @@ describe("web server", () => {
       expect(JSON.parse(await readFile(join(home, "web-client.json"), "utf8"))).toEqual({
         name: "Monchu dev",
       });
+
+      const notes = "/human-notes.txt?session=kkkk:123";
+      const noteText = "Human notes only — 🧠\nNever agent context.";
+      expect((await get(port, notes, { host: person.host })).status).toBe(401);
+      expect((await get(port, notes, service)).status).toBe(403);
+      expect((await get(port, notes, person)).status).toBe(204);
+      expect(
+        (
+          await get(
+            port,
+            notes,
+            { ...service, origin: "https://monchu.example.test" },
+            "PUT",
+            noteText,
+          )
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await get(
+            port,
+            notes,
+            { ...person, origin: "https://evil.example.test" },
+            "PUT",
+            noteText,
+          )
+        ).status,
+      ).toBe(403);
+      expect((await get(port, "/human-notes.txt?session=../escape", person)).status).toBe(400);
+      expect(
+        (
+          await get(
+            port,
+            notes,
+            { ...person, origin: "https://monchu.example.test" },
+            "PUT",
+            noteText,
+          )
+        ).status,
+      ).toBe(204);
+      const restored = await get(port, notes, person);
+      expect(restored.status).toBe(200);
+      expect(restored.text).toBe(noteText);
+      expect(restored.headers["cache-control"]).toBe("no-store");
+      expect((await stat(join(home, "human-notes.sqlite"))).isFile()).toBe(true);
+      expect(
+        (
+          await get(
+            port,
+            notes,
+            { ...person, origin: "https://monchu.example.test" },
+            "PUT",
+            "🧠".repeat(300_000),
+          )
+        ).status,
+      ).toBe(413);
+      expect((await get(port, notes, person)).text).toBe(noteText);
+
+      const brokenHome = join(home, "broken-notes");
+      await mkdir(brokenHome);
+      await writeFile(join(brokenHome, "human-notes.sqlite"), "not sqlite");
+      const brokenPort = await freePort();
+      const brokenSite = await serveWeb(
+        ingress(core),
+        { home: brokenHome, log: backend.log },
+        { ...config, port: brokenPort },
+        {},
+      );
+      try {
+        expect((await get(brokenPort, notes, person)).status).toBe(503);
+        expect((await get(brokenPort, "/manifest.webmanifest", person)).status).toBe(200);
+      } finally {
+        await brokenSite.close();
+      }
 
       // Empty goes back to the default, and leaves no file behind.
       expect((await put(person, { name: "" })).status).toBe(200);

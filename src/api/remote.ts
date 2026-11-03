@@ -23,7 +23,7 @@ import {
 } from "./attachments.ts";
 import { randomId } from "./ids.ts";
 import type { Client, LoginEntry, RootClient, RootSummary, Watched } from "./client.ts";
-import type { NewSession } from "./directories.ts";
+import type { BranchOptions, NewSession } from "./directories.ts";
 import {
   Conversation,
   Root,
@@ -476,8 +476,20 @@ export class RemoteClient implements Client {
   discoverDirectories(path: string) {
     return this.run(() => this.session.ref.discoverDirectories({ path }));
   }
-  createSession(input: NewSession, requestId: string) {
-    return this.run(() => this.session.ref.createSession({ input, requestId }));
+  checkoutBranches(path: string) {
+    return this.run(() => this.session.ref.checkoutBranches({ path }));
+  }
+  createSession(input: NewSession, requestId: string, branch?: BranchOptions) {
+    return this.run(() =>
+      this.session.ref.createSession({
+        input,
+        requestId,
+        ...(branch === undefined ? {} : { branch }),
+      }),
+    );
+  }
+  retrySessionSetup(id: string, useExisting = false) {
+    return this.run(() => this.session.ref.retrySessionSetup({ root: id, useExisting }));
   }
   assignDirectory(id: string, input: NewSession) {
     return this.run(() => this.session.ref.assignDirectory({ root: id, input }));

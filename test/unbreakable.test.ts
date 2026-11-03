@@ -149,6 +149,7 @@ export default (monchu) => monchu.registerTask(defineTask({ name: "monchu.job", 
       "web.json",
       "web-sessions.json",
       "web-client.json",
+      "human-notes.sqlite",
     ])
       await writeFile(join(home, file), "{not json");
     await mkdir(join(home, "skills", "broken"), { recursive: true });

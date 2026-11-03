@@ -814,7 +814,7 @@ describe.each([
   }, 30_000);
 });
 
-it("shows active roots as footer dots, and lists, switches, renames and archives roots from /roots", async () => {
+it("shows active roots as footer dots, and lists, switches, renames and archives roots from /threads", async () => {
   await withTerminal(48, "dark", async (screen, backend) => {
     const first = await backend.currentRoot();
     const second = await backend.createRoot("create:second");
@@ -823,7 +823,7 @@ it("shows active roots as footer dots, and lists, switches, renames and archives
     const footer = (lines: string[]) => lines.findLast((line) => line.includes(`• ${first}`)) ?? "";
     await waitFor(async () => footer(await screen.flushAndGetViewport()).startsWith(" ● "));
 
-    send(screen, "/roots");
+    send(screen, "/threads");
     const panel = await visible(screen, "Enter open");
     const rows = panel.filter((line) => line.includes(first) || line.includes(second));
     // Newest input first; the shown root is selected and marked.
@@ -840,9 +840,9 @@ it("shows active roots as footer dots, and lists, switches, renames and archives
       return line !== undefined && /^ [^●]/.test(line) && line.includes("hello two");
     });
 
-    send(screen, "/roots rename garden");
+    send(screen, "/threads rename garden");
     await visible(screen, "root renamed · garden");
-    send(screen, "/roots");
+    send(screen, "/threads");
     await visible(screen, "Enter open");
     screen.sendInput("\x1b[B");
     screen.sendInput("a");
@@ -862,7 +862,7 @@ it("shows active roots as footer dots, and lists, switches, renames and archives
     screen.sendInput("a");
     await visible(screen, "unarchived");
     screen.sendInput("\x1b");
-    send(screen, `/roots ${first}`);
+    send(screen, `/threads ${first}`);
     await visible(screen, `root · ${first} · new root`);
     expect(screen.stopped).toBe(false);
   });

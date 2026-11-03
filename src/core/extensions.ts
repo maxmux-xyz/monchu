@@ -12,6 +12,7 @@ import { Goals } from "./agents/goals.ts";
 import { createMemory } from "./agents/memory.ts";
 import { Roots } from "./agents/roots.ts";
 import { createWorkerTools } from "./agents/workers.ts";
+import { Subthreads } from "./agents/subthreads.ts";
 import { createSessions } from "./agents/sessions.ts";
 import { Directories } from "./directories.ts";
 import { BUILD, BuildHost, Builds, RELOAD_TOOLS, type Build, type BuildInputs } from "./build.ts";
@@ -27,6 +28,7 @@ import { createPiTools } from "./tools/pi-tools.ts";
 import { createSecrets } from "./secrets/tool.ts";
 import { createPluginSections, reservedTasks } from "./plugins.ts";
 import { createToolSearch, groupExtensionName } from "./tools/tool-search.ts";
+import type { CheckoutProvider } from "../plugin.ts";
 
 /** Build every extension from this copy of the code, reading config, skills and MCP listings anew. */
 async function build(inputs: BuildInputs): Promise<Build> {
@@ -36,7 +38,8 @@ async function build(inputs: BuildInputs): Promise<Build> {
   const tools = createPiTools(context.settings, inputs.finders, inputs.vault);
   const memory = createMemory(inputs.home);
   const root = [Goals, memory, Roots, Inbox];
-  const sessions = (preload: readonly string[]) => createSessions(inputs.config, root, preload);
+  const sessions = (preload: readonly string[], providers: ReadonlyMap<string, CheckoutProvider>) =>
+    createSessions(inputs.config, root, preload, inputs.home, providers);
   const identity = createIdentity(inputs.home, inputs.reportSkipped, inputs.observeBudget);
   // An mcp.json or mcp.local.json that isn't JSON must not keep the device from opening: no server loads.
   const mcpConfig = await loadMcpConfig(inputs.home).catch((error: unknown) => {
@@ -65,7 +68,8 @@ async function build(inputs: BuildInputs): Promise<Build> {
     Goals,
     Inbox,
     Directories,
-    sessions([]),
+    sessions([], new Map()),
+    Subthreads,
   ];
   const own = [...core, memory, identity, mcp.extension, secrets];
   const plugins = loaded.use({
@@ -99,10 +103,11 @@ async function build(inputs: BuildInputs): Promise<Build> {
     // After the secrets, so the inbox tool joins the end of each root's list.
     Inbox,
     Directories,
-    sessions(search.preload),
+    sessions(search.preload, plugins.checkouts),
     ...search.groups,
     createPluginSections(plugins.sections),
     ...plugins.attached,
+    Subthreads,
   ];
   inputs.validate(extensions);
   return {

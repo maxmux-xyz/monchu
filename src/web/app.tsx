@@ -28,79 +28,84 @@ import {
   directoriesShown,
 } from "./state.ts";
 import { Transcript } from "./transcript.tsx";
-import { Sessions, directoryForm, assignSessionDirectory } from "./sessions.tsx";
+import { directoryForm, Sessions, sessionStatus } from "./sessions.tsx";
 import { useEffect } from "preact/hooks";
 
-const lists = signal<typeof import("./panels.tsx") | undefined>(undefined);
-function WorkPanel() {
-  const error = useSignal("");
-  useEffect(() => {
-    void import("./panels.tsx")
-      .then((module) => {
-        lists.value = module;
-      })
-      .catch((failure: unknown) => {
-        error.value = failure instanceof Error ? failure.message : String(failure);
-      });
-  }, []);
-  const loaded = lists.value;
-  return loaded === undefined ? (
-    <main class="transcript">{error.value || "Loading…"}</main>
-  ) : panel.value === "goals" ? (
-    <loaded.GoalsPanel />
-  ) : (
-    <loaded.JobsPanel />
+const sessionsCollapsed = signal(false);
+const sessionsWidth = signal(280);
+
+const filesWidth = signal<number>();
+
+function PaneDivider({ files = false }: { files?: boolean }) {
+  const width = files ? filesWidth : sessionsWidth;
+  const min = 200;
+  const max = files
+    ? innerWidth -
+      (sessionsCollapsed.value ? 0 : Math.min(sessionsWidth.value, innerWidth * 0.4)) -
+      min
+    : innerWidth * 0.4;
+  const current = Math.min(max, width.value ?? innerWidth * 0.4);
+  const resize = (size: number) => {
+    width.value = Math.max(min, Math.min(max, size));
+  };
+  return (
+    <div
+      role="separator"
+      aria-label={files ? "Resize documentation" : "Resize sessions"}
+      aria-orientation="vertical"
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={current}
+      tabIndex={0}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId))
+          resize(files ? innerWidth - event.clientX : event.clientX);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          resize(current + (event.key === "ArrowLeft" ? -16 : 16) * (files ? -1 : 1));
+        }
+      }}
+    />
   );
 }
 
-const directoryPanels = signal<typeof import("./panels.tsx").DirectoryPanels | undefined>(
-  undefined,
-);
-const directoryLoadError = signal("");
-
-function DirectoryPanel({ catalog = false }: { catalog?: boolean }) {
-  const owned = roots.value.find((item) => item.id === rootId.value)?.directory;
-  const form = directoryForm.value;
+const panels = signal<typeof import("./panels.tsx") | undefined>(undefined);
+const panelLoadError = signal("");
+function Panels({ catalog = false, work }: { catalog?: boolean; work?: boolean }) {
   useEffect(() => {
-    if (directoryPanels.peek() !== undefined || (!owned && !form && !catalog)) return;
+    if (panels.peek()) return;
     void import("./panels.tsx")
       .then((module) => {
-        directoryPanels.value = module.DirectoryPanels;
+        panels.value = module;
       })
-      .catch((error: unknown) => {
-        directoryLoadError.value = error instanceof Error ? error.message : String(error);
+      .catch((failure: unknown) => {
+        panelLoadError.value = failure instanceof Error ? failure.message : String(failure);
       });
-  }, [owned, form, catalog]);
-  const Loaded = directoryPanels.value;
-  return Loaded ? (
-    <Loaded catalog={catalog} />
-  ) : (
-    <aside
-      class={catalog ? "directory-catalog" : "directory-files"}
-      aria-label={catalog ? "Directories" : "Owned directory files"}
+  }, []);
+  const loaded = panels.value;
+  if (loaded)
+    return work ? (
+      panel.value === "goals" ? (
+        <loaded.GoalsPanel />
+      ) : (
+        <loaded.JobsPanel />
+      )
+    ) : (
+      <loaded.DirectoryPanels catalog={catalog} />
+    );
+  return (
+    <div
+      class={work ? "transcript" : catalog ? "directory-catalog" : "directory-files"}
+      role={panelLoadError.value ? "alert" : "status"}
     >
-      <header>
-        <strong>Owned files</strong>
-      </header>
-      <div class="directory-empty">
-        {directoryLoadError.value ? (
-          <p role="alert">{directoryLoadError.value}. Reload to retry.</p>
-        ) : owned || form || catalog ? (
-          <p>Loading…</p>
-        ) : (
-          <>
-            <p>This session has no owned directory.</p>
-            <button
-              type="button"
-              onClick={assignSessionDirectory}
-              disabled={rootId.value === undefined}
-            >
-              Assign directory
-            </button>
-          </>
-        )}
-      </div>
-    </aside>
+      {panelLoadError.value || "Loading…"}
+    </div>
   );
 }
 
@@ -370,59 +375,89 @@ function Queue() {
 }
 
 export function App() {
+  useEffect(() => {
+    const focusComposer = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        event.detail !== 1 ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey ||
+        !(target instanceof Element) ||
+        matchMedia("(pointer: coarse)").matches ||
+        directoryForm.peek() !== undefined ||
+        getSelection()?.isCollapsed === false ||
+        (!target.closest(".session-row") &&
+          target.closest(
+            "a, button, summary, label, input, textarea, select, [contenteditable], [role=separator], [role=dialog], [role=listbox]",
+          ))
+      )
+        return;
+      document
+        .querySelector<HTMLTextAreaElement>('.editor textarea[aria-label="message"]')
+        ?.focus({ preventScroll: true });
+    };
+    document.addEventListener("click", focusComposer);
+    return () => document.removeEventListener("click", focusComposer);
+  }, []);
   const state = view(shown.value)?.value;
   const active = roots.value.find((item) => item.id === rootId.value);
+  const repository = active?.directory?.repoPath;
   return (
     <>
-      {active?.directory === undefined ? (
-        <header class="hidden">
-          <h1>Sessions</h1>
-        </header>
-      ) : (
-        <header class="session-repository">
-          <h1>{active.directory.repoPath}</h1>
-        </header>
-      )}
+      <header class={repository ? "session-repository" : "hidden"}>
+        <h1>{repository ?? "Sessions"}</h1>
+      </header>
       <div class="compact-navigation">
         <TopBar />
       </div>
-      <div class="session-layout">
-        <Sessions />
+      <div
+        class={`session-layout${sessionsCollapsed.value ? " collapsed" : ""}`}
+        style={{
+          "--tree-width": `${sessionsWidth.value}px`,
+          "--files-width": filesWidth.value && `${filesWidth.value}px`,
+        }}
+      >
+        <Sessions>
+          <PaneDivider />
+        </Sessions>
         {directoriesShown.value ? (
-          <DirectoryPanel catalog />
+          <Panels catalog />
         ) : (
           <>
             <div class="chat-pane">
               <div class="chat-toolbar" role="region" aria-label="Session status">
+                <PaneDivider files />
+                <button
+                  class="icon"
+                  aria-label={sessionsCollapsed.value ? "Show sessions" : "Hide sessions"}
+                  aria-expanded={!sessionsCollapsed.value}
+                  aria-controls="sessions"
+                  onClick={() => {
+                    sessionsCollapsed.value = !sessionsCollapsed.value;
+                  }}
+                />
                 <strong>Chat</strong>
-                <span>
-                  {active?.error
-                    ? "! failed"
-                    : active?.status === "working"
-                      ? "● working"
-                      : active?.needsInput
-                        ? "? needs you"
-                        : "○ idle"}
-                </span>
+                <span>{sessionStatus(active)}</span>
               </div>
               {panel.value === "client" ? (
                 <ClientPanel />
               ) : panel.value === "secrets" ? (
                 <SecretsPanel />
               ) : panel.value === "goals" || panel.value === "jobs" ? (
-                <WorkPanel />
+                <Panels work />
               ) : state === undefined ? (
                 <main class="transcript">
                   connecting…{linkError.value ? ` ${linkError.value}` : ""}
                 </main>
               ) : (
-                <>
-                  <Transcript
-                    key={state.conversation.id}
-                    view={whole(shown.value)?.value ?? state}
-                    front={shown.value === undefined}
-                  />
-                </>
+                <Transcript
+                  key={state.conversation.id}
+                  view={whole(shown.value)?.value ?? state}
+                  front={shown.value === undefined}
+                />
               )}
               <Queue />
               <Login />
@@ -438,7 +473,7 @@ export function App() {
               )}
               <Footer />
             </div>
-            <DirectoryPanel />
+            <Panels />
           </>
         )}
       </div>

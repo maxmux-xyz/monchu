@@ -22,7 +22,7 @@ type Input =
         | "/stop"
         | "/close"
         | "/agents"
-        | "/roots"
+        | "/threads"
         | "/model"
         | "/mcp"
         | "/logs"
@@ -48,9 +48,9 @@ export const commands: Record<
     usage: "[name|root]",
     help: "show the root or a worker; messages go to the one shown",
   },
-  "/roots": {
+  "/threads": {
     usage: "[id|new|rename|archive]",
-    help: "roots: switch, start, rename, archive; each has its own crew",
+    help: "switch, start, rename or archive a thread",
   },
   "/goals": { usage: "", help: "ongoing projects and commitments" },
   "/reply": {
@@ -174,7 +174,7 @@ export const helpText = (
           "Ctrl+V (Alt+V on Windows) attaches a copied image or file, and a pasted image path attaches that image.",
           "Alt+S toggles whether a message to a busy conversation steers its reply or follows up after it.",
         ]),
-    "Plain messages and /model, /thinking, /stop and /cd go to the conversation shown; /new and /compact always target the shown root. Footer dots are roots at work (●) or done unseen; /roots has them.",
+    "Plain messages and /model, /thinking, /stop and /cd go to the conversation shown; /new and /compact always target the shown root. Footer dots are roots at work (●) or done unseen; /threads has them.",
   ].join("\n");
 
 /** Parse once at the input boundary; directory/message tails may contain spaces and newlines. */
@@ -201,7 +201,7 @@ export function parseInput(raw: string): Input | undefined {
     case "/new":
     case "/compact":
     case "/agents":
-    case "/roots":
+    case "/threads":
     case "/model":
     case "/mcp":
     case "/stop":

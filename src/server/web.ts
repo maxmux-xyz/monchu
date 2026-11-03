@@ -5,10 +5,11 @@
  * this port's localhost, and the WebSocket's Origin must match it.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { DatabaseSync } from "node:sqlite";
 import type { WebConfig } from "../core/config.ts";
 import type { Log } from "../telemetry/log.ts";
 import { WebAuth } from "./auth.ts";
@@ -109,12 +110,15 @@ function manifest(settings: ClientSettings): string {
 
 /** A request body, up to `limit` bytes. */
 async function body(request: IncomingMessage, limit: number): Promise<string> {
-  let text = "";
-  for await (const chunk of request) {
-    text += String(chunk);
-    if (text.length > limit) throw new Error("Too large");
+  const parts: Buffer[] = [];
+  let size = 0;
+  for await (const value of request) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(String(value));
+    size += chunk.length;
+    if (size <= limit) parts.push(chunk);
   }
-  return text;
+  if (size > limit) throw new Error("Too large");
+  return Buffer.concat(parts).toString("utf8");
 }
 
 function header(request: IncomingMessage, name: string): string | undefined {
@@ -149,6 +153,25 @@ export async function serveWeb(
     body: string,
     attributes?: Record<string, string | number>,
   ) => logs.write(severity, "server.web", body, attributes);
+
+  let notes: DatabaseSync | undefined;
+  try {
+    const path = join(home, "human-notes.sqlite");
+    const file = await open(path, "a", 0o600);
+    try {
+      await file.chmod(0o600);
+    } finally {
+      await file.close();
+    }
+    notes = new DatabaseSync(path);
+    notes.exec(
+      "CREATE TABLE IF NOT EXISTS human_notes (session TEXT PRIMARY KEY, text TEXT NOT NULL)",
+    );
+  } catch (error) {
+    notes?.close();
+    notes = undefined;
+    log("warn", "human notes unavailable", { reason: error instanceof Error ? error.message : "" });
+  }
 
   /** The request's allowed identities, or a response already sent. */
   async function guard(request: IncomingMessage, response: ServerResponse | undefined) {
@@ -234,12 +257,54 @@ export async function serveWeb(
           "set-cookie": `monchu_session=; Path=/; HttpOnly;${secure} SameSite=Lax; Max-Age=0`,
         });
       }
+      // The inner sandbox inherits this shell’s inline-style policy without loosening the app’s CSP.
+      // This static shell contains no session data and can load without an iframe login cookie.
+      if (url.pathname === "/file-preview.html" && request.method === "GET")
+        return send(
+          response,
+          200,
+          '<!doctype html><html><head><meta charset="utf-8"><title>HTML preview</title><style>body{margin:0}iframe{display:block;width:100vw;height:100vh;border:0}</style></head><body><iframe title="Document" sandbox=""></iframe></body></html>',
+          {
+            "content-type": "text/html; charset=utf-8",
+            "x-frame-options": "SAMEORIGIN",
+            "content-security-policy":
+              "default-src 'none'; style-src 'unsafe-inline'; img-src data:; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
+          },
+        );
       const identities = await guard(request, response);
       if (identities === undefined) return;
       if (url.pathname === "/manifest.webmanifest" && request.method === "GET")
         return send(response, 200, manifest(await loadClientSettings(settingsPath)), {
           "content-type": "application/manifest+json",
         });
+      if (url.pathname === "/human-notes.txt") {
+        if (identities.some((identity) => identity.startsWith("service:")))
+          return send(response, 403, "Human notes require a person's login");
+        const key = url.searchParams.get("session") ?? "";
+        if (!/^[a-z0-9]{4,32}:[0-9]{1,16}$/.test(key))
+          return send(response, 400, "Invalid notes session");
+        if (!notes) return send(response, 503, "Human notes storage is unavailable");
+        if (request.method === "GET") {
+          const row = notes.prepare("SELECT text FROM human_notes WHERE session = ?").get(key);
+          if (!row) return send(response, 204, "");
+          if (typeof row.text !== "string") throw new Error("Invalid human note");
+          return send(response, 200, row.text);
+        }
+        if (request.method !== "PUT") return send(response, 405, "Method not allowed");
+        if (!origins.has(header(request, "origin") ?? "")) return send(response, 403, "Bad origin");
+        let text;
+        try {
+          text = await body(request, 1024 * 1024);
+        } catch {
+          return send(response, 413, "Notes exceed the 1 MiB limit");
+        }
+        notes
+          .prepare(
+            "INSERT INTO human_notes (session, text) VALUES (?, ?) ON CONFLICT(session) DO UPDATE SET text = excluded.text",
+          )
+          .run(key, text);
+        return send(response, 204, "");
+      }
       if (url.pathname === "/client.json") {
         const person = !identities.some((identity) => identity.startsWith("service:"));
         if (request.method === "PUT") {
@@ -341,7 +406,10 @@ export async function serveWeb(
         for (const client of sockets.clients) client.close(1012, "Monchu is restarting");
         sockets.close();
         server.closeAllConnections();
-        server.close(() => done());
+        server.close(() => {
+          notes?.close();
+          done();
+        });
       }),
   };
 }

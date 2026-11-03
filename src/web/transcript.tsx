@@ -22,6 +22,7 @@ import { parseShortId } from "../api/ids.ts";
 import { presentation } from "../ui/state.ts";
 import { UserAttachments } from "./attachments.tsx";
 import { ranges } from "./fuzzy.ts";
+import { branchProposal, directoryForm } from "./sessions.tsx";
 import { Markdown } from "./markdown.tsx";
 import type { InboxItem } from "../api/client.ts";
 import { Briefer } from "./inbox.tsx";
@@ -307,13 +308,14 @@ function Assistant(props: {
   message: AssistantMessage;
   results: Map<string, ToolResultMessage>;
   stamp: ComponentChildren;
+  progress: boolean;
 }) {
   return (
     <>
       {props.message.content.map((part) => {
         if (part.type === "text")
           return part.text.trim() ? (
-            <div class="assistant">
+            <div class={props.progress ? "progress" : "assistant"}>
               <Markdown text={part.text} />
             </div>
           ) : null;
@@ -327,7 +329,6 @@ function Assistant(props: {
               running={undefined}
             />
           );
-        // Thinking stays private, as in the terminal.
         return null;
       })}
       {props.stamp}
@@ -344,6 +345,7 @@ function entryNode(
   results: Map<string, ToolResultMessage>,
   ids: ShortIds,
   item: InboxItem | undefined,
+  progress: boolean,
 ): VNode | null {
   const shown = addressable(entry) ? (
     <Stamp entry={entry} ids={ids} reply={item !== undefined} />
@@ -427,6 +429,7 @@ function entryNode(
     const reply = (
       <Assistant
         message={message}
+        progress={progress}
         results={results}
         stamp={
           shown === undefined ? null : (
@@ -719,6 +722,29 @@ const AT_END = 48;
  */
 let placeRead = false;
 
+function Activity({
+  header,
+  children,
+}: {
+  header: ComponentChildren;
+  children: ComponentChildren;
+}) {
+  const [open, setOpen] = useFold();
+  return (
+    <details class="activity" open={open}>
+      <summary
+        onClick={(event) => {
+          event.preventDefault();
+          setOpen(!event.currentTarget.closest("details")?.open);
+        }}
+      >
+        {header}
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 /** One conversation's transcript; keyed by the conversation, so another one starts at its end. */
 export function Transcript({ view, front }: { view: ConversationView; front: boolean }) {
   // The front's stream is the root's inbox: each reply's label, and the person's filter.
@@ -754,35 +780,120 @@ export function Transcript({ view, front }: { view: ConversationView; front: boo
       order.push(after + 1 - 1 / (item.id + 2));
     }
   };
+  let activity: ComponentChildren[] = [];
+  let activityId = 0;
+  let toolCount = 0;
+  let failures = 0;
+  let latest = "";
+  const flushActivity = (status = "") => {
+    if (activity.length || status) {
+      nodes.push(
+        <Activity
+          key={`activity-${activityId}`}
+          header={
+            <>
+              <b>Agent activity</b>
+              {status && ` · ${status}`}
+              {toolCount > 0 && ` · ${toolCount} tool call${toolCount === 1 ? "" : "s"}`}
+              {failures > 0 && <span class="failed"> · {failures} failed</span>}
+              {latest && <span class="activity-preview">{latest}</span>}
+            </>
+          }
+        >
+          {activity}
+        </Activity>,
+      );
+    }
+    activity = [];
+    toolCount = failures = 0;
+    latest = "";
+  };
   let kept = 0;
   for (const entry of view.entries) {
     if (entry.head === undefined) flush(entry.id);
-    const calls =
-      entry.kind === "pi.assistant"
-        ? (entry.model ?? [])
-            .flatMap((message) =>
-              message.role === "assistant"
-                ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
-                : [],
-            )
-            .map((id) => (results.has(id) ? "1" : "0"))
-            .join("")
-        : "";
     if (!keep(entry)) continue;
     kept++;
+    const message = entry.model?.[0];
+    const assistant =
+      entry.kind === "pi.assistant" && message?.role === "assistant" ? message : undefined;
+    const progress = assistant?.stopReason === "toolUse";
+    if (entry.kind === "pi.user" || entry.kind === "pi.reset" || entry.kind === "pi.compaction") {
+      flushActivity();
+      activityId = entry.id;
+    }
+    let calls = "";
+    for (const part of assistant?.content ?? []) {
+      if (part.type === "toolCall") {
+        const result = results.get(part.id);
+        calls += result ? "1" : "0";
+        toolCount++;
+        if (part.name === "propose_subthread" && result !== undefined && !result.isError) {
+          nodes.push(
+            <div class="card branch-offer" key={part.id}>
+              <b>Branch this work into a subthread?</b>{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  branchProposal.value = { id: part.id, input: part.arguments };
+                  directoryForm.value = "branch";
+                }}
+              >
+                Review &amp; open
+              </button>
+            </div>,
+          );
+        }
+        if (result?.isError) failures++;
+      } else if (part.type === "thinking" && !part.redacted && part.thinking.trim()) {
+        activity.push(
+          <details class="reasoning">
+            <summary>Thinking trace</summary>
+            <Markdown text={part.thinking} />
+          </details>,
+        );
+      } else if (part.type === "text" && progress && part.text.trim()) {
+        latest = part.text.trim();
+      }
+    }
     const item = items.get(entry.id);
     const key = `${calls}:${prefixes.get(entry.id) ?? 0}:${item?.kind}:${item?.goal}:${item?.state}`;
     const cached = cache.get(entry);
     let node = cached?.node;
     if (cached === undefined || cached.results !== key) {
-      node = entryNode(entry, results, ids, item);
+      node = entryNode(entry, results, ids, item, progress);
       cache.set(entry, { results: key, node });
     }
-    nodes.push(<Fragment key={entry.id}>{node}</Fragment>);
+    const row = <Fragment key={entry.id}>{node}</Fragment>;
+    if (progress) activity.push(row);
+    else {
+      if (assistant) {
+        flushActivity();
+        activityId = entry.id;
+      }
+      if (node) nodes.push(row);
+    }
     order.push(entry.id);
   }
-  flush(Infinity);
   const live = presentation(view);
+  if (!filtered) {
+    for (const call of live.calls) {
+      if (results.has(call.id)) continue;
+      toolCount++;
+      activity.push(
+        <ToolCard
+          key={call.id}
+          name={call.name}
+          args={call.arguments}
+          result={undefined}
+          running={live.output.find((output) => output.id === call.id)?.text}
+        />,
+      );
+    }
+  }
+  flushActivity(
+    filtered ? "" : live.partial && live.status === "Working…" ? "Writing…" : live.status,
+  );
+  flush(Infinity);
   const name = shownName.peek();
   const history = earlierOf(name)?.value;
   const main = useRef<HTMLElement>(null);
@@ -912,6 +1023,9 @@ export function Transcript({ view, front }: { view: ConversationView; front: boo
       return;
     }
     reading();
+    const activity = target.closest("details.activity");
+    if (activity instanceof HTMLDetailsElement && !activity.open)
+      activity.querySelector("summary")?.click();
     target.scrollIntoView({ block: "center" });
   };
   // Older history loads as the reader nears the top, a page at a time, while the top stays in sight. A filter loads
@@ -1075,24 +1189,12 @@ export function Transcript({ view, front }: { view: ConversationView; front: boo
           <Markdown text={live.partial} />
         </div>
       ) : null}
-      {live.calls
-        .filter((call) => !results.has(call.id))
-        .map((call) => (
-          <ToolCard
-            key={call.id}
-            name={call.name}
-            args={call.arguments}
-            result={undefined}
-            running={live.output.find((output) => output.id === call.id)?.text}
-          />
-        ))}
       {filtered && kept === 0 ? (
         <div class="status">
           nothing here yet · the front labels a message by starting it with ask, done or update;
           /classifier labels the rest
         </div>
       ) : null}
-      {live.status && !filtered ? <div class="status">{live.status}</div> : null}
       {left.value !== undefined && (unread > 0 || streaming) ? (
         <button
           class="unread"

@@ -31,6 +31,7 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
+  if (request.destination === "iframe") return;
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request).catch(async () => (await caches.match("/")) ?? Response.error()),

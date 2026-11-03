@@ -47,7 +47,7 @@ import { MonchuTui, type LocalFile } from "./view.ts";
  */
 export async function runTerminal(
   backend: Client,
-  /** The root this terminal opens, by full id; `/roots` switches it. */
+  /** The root this terminal opens, by full id; `/threads` switches it. */
   rootId: string,
   terminal: Terminal = new ProcessTerminal(),
   herdr?: HerdrAgent,
@@ -693,7 +693,7 @@ export async function runTerminal(
         });
         break;
       }
-      case "/roots": {
+      case "/threads": {
         const command = parseRootsCommand(input.text);
         switch (command.kind) {
           case "list":
@@ -733,7 +733,7 @@ export async function runTerminal(
               command.prefix === undefined ? rootId : await backend.findRoot(command.prefix);
             await archive(id, command.archived);
             view.notice(
-              `${command.archived ? "archived" : "unarchived"} · ${id}${command.archived ? " · nothing deleted; /roots h shows it" : ""}`,
+              `${command.archived ? "archived" : "unarchived"} · ${id}${command.archived ? " · nothing deleted; /threads h shows it" : ""}`,
             );
             break;
           }

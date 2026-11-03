@@ -35,6 +35,8 @@ import type { Release } from "./release.ts";
 import type { McpServerReport } from "./reports.ts";
 import {
   SessionInput,
+  BranchOptions,
+  type CheckoutBranches,
   type DirectoryCatalog,
   type DirectoryFile,
   type DirectoryListing,
@@ -214,7 +216,12 @@ const sessionMethods = {
     trusted<FolderListing>(),
   ),
   discoverDirectories: method(Type.Object({ path: id }), trusted<DirectoryCatalog>()),
-  createSession: method(Type.Object({ input: SessionInput, requestId: id }), trusted<string>()),
+  checkoutBranches: method(Type.Object({ path: id }), trusted<CheckoutBranches>()),
+  createSession: method(
+    Type.Object({ input: SessionInput, requestId: id, branch: Type.Optional(BranchOptions) }),
+    trusted<string>(),
+  ),
+  retrySessionSetup: method(Type.Object({ root: id, useExisting: Type.Optional(Type.Boolean()) })),
   assignDirectory: method(Type.Object({ root: id, input: SessionInput })),
   listDirectory: method(Type.Object({ root: id, path: text }), trusted<DirectoryListing>()),
   readDirectoryFile: method(Type.Object({ root: id, path: text }), trusted<DirectoryFile>()),

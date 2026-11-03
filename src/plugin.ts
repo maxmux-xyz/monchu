@@ -49,7 +49,15 @@ export type {
  * The plugin API's version, as `PluginApi.apiVersion`. It grows when the API changes shape, so a plugin can refuse an
  * older Monchu with a clear message instead of failing on a missing member.
  */
-export const PLUGIN_API_VERSION = 2;
+export const PLUGIN_API_VERSION = 3;
+
+/** Repository checkout support, shared by human session setup and head agents' start_session. */
+export interface CheckoutProvider {
+  /** Return undefined for repositories this provider does not handle. Reading must not snapshot or mutate them. */
+  branches(repoPath: string): Promise<{ branches: string[]; current: string } | undefined>;
+  /** Create an isolated checkout at path. A replay must reuse it only if it belongs to the same repository. */
+  create(repoPath: string, path: string, branch: string): Promise<void>;
+}
 
 /**
  * How the model reaches a tool, as Pi's `exposure`. Monchu's default is `deferred`, not Pi's `direct`, so adding or
@@ -578,6 +586,8 @@ export interface PluginApi {
    * one), and one plugin at a time keeps them: a second plugin that registers one is not loaded.
    */
   registerSecretStore(store: SecretStore): void;
+  /** One checkout provider per plugin. Disabling the plugin disables its checkout creation. */
+  registerCheckouts(provider: CheckoutProvider): void;
   /**
    * Monchu's own: a Durable task the plugin's tools create, such as a wait that outlives a turn. Name it after the
    * plugin; its definition must be registered at every load, so pending tasks resume.

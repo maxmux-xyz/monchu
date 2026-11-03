@@ -129,7 +129,7 @@ export class RootsPanel implements Component, Focusable {
     return [
       rule,
       truncateToWidth(
-        ` ${list.selectedText("Roots")}${dim(" · each has its own workers and goals")}`,
+        ` ${list.selectedText("Threads")}${dim(" · each has its own workers and goals")}`,
         width,
         "…",
       ),

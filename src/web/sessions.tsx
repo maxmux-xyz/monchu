@@ -1,8 +1,7 @@
 import { signal, useSignal, type Signal } from "@preact/signals";
+import type { ComponentChildren } from "preact";
 import { useRef } from "preact/hooks";
 import {
-  DIRECTORY_TYPES,
-  type DirectoryType,
   type DirectoryCatalog,
   type ManagedDirectory,
   type FolderListing,
@@ -38,7 +37,8 @@ export async function browseDirectories() {
 
 export const directoryCandidate = signal<ManagedDirectory | undefined>(undefined);
 
-export const directoryForm = signal<"new" | "assign" | undefined>(undefined);
+export const directoryForm = signal<"new" | "assign" | "branch" | undefined>(undefined);
+export const branchProposal = signal<{ id: string; input: unknown } | undefined>(undefined);
 
 export function DirectoryInput(props: {
   label: string;
@@ -206,39 +206,170 @@ export function DirectoryInput(props: {
   );
 }
 
-export function SessionOptions({ type }: { type: DirectoryType }) {
-  const selectedType = useSignal<string>(type);
-  const selectedRole = useSignal("head");
+export const humanNotesShown = signal(false);
+// Human-only web endpoint; never expose these notes through agent clients or tools.
+type HumanNote = { text: Signal<string>; status: Signal<string>; loaded: boolean; saving: boolean };
+const humanNotes = new Map<string, HumanNote>();
+const notesUrl = (id: string) => `/human-notes.txt?session=${encodeURIComponent(id)}`;
+const notesKey = (id: string) => `monchu:human-notes:${id}`;
+
+function cacheNote(id: string, text: string) {
+  try {
+    localStorage.setItem(notesKey(id), text);
+  } catch {
+    /* The server remains the durable copy. */
+  }
+}
+
+async function saveNote(id: string, note: HumanNote) {
+  note.status.value = "Saving…";
+  if (note.saving) return;
+  note.saving = true;
+  try {
+    for (;;) {
+      const text = note.text.peek();
+      const response = await fetch(notesUrl(id), { method: "PUT", body: text, redirect: "error" });
+      if (!response.ok) {
+        note.status.value = response.status === 413 ? "Too large (max 1 MiB)" : "Save failed";
+        return;
+      }
+      if (note.text.peek() === text) {
+        note.status.value = "Saved";
+        return;
+      }
+    }
+  } catch {
+    note.status.value = "Save failed";
+  } finally {
+    note.saving = false;
+  }
+}
+
+async function loadNote(id: string, note: HumanNote) {
+  note.status.value = "Loading…";
+  try {
+    note.text.value = localStorage.getItem(notesKey(id)) ?? "";
+  } catch {
+    /* Browser storage is optional. */
+  }
+  try {
+    const response = await fetch(notesUrl(id), { cache: "no-store", redirect: "error" });
+    if (!response.ok) {
+      note.status.value = "Load failed";
+      return;
+    }
+    const text = response.status === 204 ? null : await response.text();
+    note.loaded = true;
+    if (text === null && note.text.peek()) {
+      await saveNote(id, note);
+      return;
+    }
+    note.text.value = text ?? "";
+    cacheNote(id, note.text.peek());
+    note.status.value = "Saved";
+  } catch {
+    note.status.value = "Load failed";
+  }
+}
+
+export function DirectoryHeader({
+  refresh,
+  disabled,
+}: {
+  refresh?: () => void;
+  disabled?: boolean;
+}) {
   return (
-    <div class="session-fields">
-      <label>
-        Directory type
-        <select
-          name="directoryType"
-          value={selectedType.value}
-          onChange={(event) => {
-            selectedType.value = event.currentTarget.value;
+    <header>
+      <nav class="directory-tabs" aria-label="Right pane">
+        <button
+          type="button"
+          aria-pressed={!humanNotesShown.value}
+          onClick={() => {
+            humanNotesShown.value = false;
           }}
         >
-          {DIRECTORY_TYPES.map((type) => (
-            <option key={type}>{type}</option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Agent role
-        <select
-          name="agentRole"
-          value={selectedRole.value}
-          onChange={(event) => {
-            selectedRole.value = event.currentTarget.value;
+          Files
+        </button>
+        <button
+          type="button"
+          aria-pressed={humanNotesShown.value}
+          onClick={() => {
+            humanNotesShown.value = true;
           }}
         >
-          <option>head</option>
-          <option>worker</option>
-        </select>
-      </label>
-    </div>
+          Human notes
+        </button>
+      </nav>
+      {refresh ? (
+        <button
+          type="button"
+          class="icon"
+          aria-label="Refresh files"
+          disabled={disabled}
+          onClick={refresh}
+        >
+          ⟲
+        </button>
+      ) : null}
+    </header>
+  );
+}
+
+export function HumanNotes() {
+  const session = roots.value.find((item) => item.id === rootId.value);
+  const id = session ? `${session.id}:${session.createdAt}` : undefined;
+  let note = id === undefined ? undefined : humanNotes.get(id);
+  if (id !== undefined && note === undefined) {
+    note = { text: signal(""), status: signal("Loading…"), loaded: false, saving: false };
+    humanNotes.set(id, note);
+    void loadNote(id, note);
+  }
+  const current = note;
+  const status = current?.status.value ?? "Choose a session";
+  const failed = current !== undefined && !["Loading…", "Saving…", "Saved"].includes(status);
+  return (
+    <aside
+      class="directory-files human-notes"
+      aria-label="Human notes"
+      onKeyDown={(event) => event.stopPropagation()}
+      onPaste={(event) => event.stopPropagation()}
+      onDragOver={(event) => {
+        event.stopPropagation();
+        if (event.dataTransfer?.types.includes("Files")) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        event.stopPropagation();
+        if (event.dataTransfer?.files.length) event.preventDefault();
+      }}
+    >
+      <DirectoryHeader />
+      <textarea
+        aria-label="Human notes"
+        aria-describedby="human-notes-status"
+        readOnly={!current?.loaded}
+        value={current?.text.value ?? ""}
+        onInput={(event) => {
+          if (current === undefined || id === undefined || !current.loaded) return;
+          current.text.value = event.currentTarget.value;
+          cacheNote(id, current.text.peek());
+          void saveNote(id, current);
+        }}
+      />
+      <p id="human-notes-status" role={failed ? "alert" : "status"}>
+        {status}
+        {failed && current && id ? (
+          <button
+            type="button"
+            onClick={() => {
+              void (current.loaded ? saveNote(id, current) : loadNote(id, current));
+            }}
+          >
+            Retry
+          </button>
+        ) : null}
+      </p>
+    </aside>
   );
 }
 
@@ -247,11 +378,28 @@ export function assignSessionDirectory(): void {
   directoryForm.value = "assign";
 }
 
-function sessionStatus(session: RootSummary): string {
-  return session.error ? "!" : session.status === "working" ? "●" : session.needsInput ? "?" : "○";
+export function sessionStatus(session?: RootSummary): string {
+  return session?.error
+    ? "! failed"
+    : session?.preparing
+      ? "● preparing workspace"
+      : session?.status === "working"
+        ? "● working"
+        : session?.needsInput
+          ? "? needs you"
+          : "○ idle";
 }
 
-export function Sessions() {
+export function threadLabel(label: string): string {
+  return (
+    label
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "-")
+      .replace(/^-|-$/g, "") || "new-session"
+  );
+}
+
+export function Sessions({ children }: { children: ComponentChildren }) {
   const all = roots.value.filter(
     (session) => session.directory !== undefined || session.label !== "",
   );
@@ -276,17 +424,25 @@ export function Sessions() {
             type="button"
             class={`session-row${item.id === rootId.value ? " on" : ""}`}
             aria-current={item.id === rootId.value}
-            title={`${item.label || "New session"} · ${item.directory?.agentRole ?? "unassigned"} · ${item.error ?? item.status}`}
+            title={`${threadLabel(item.label)} · ${item.directory?.agentRole ?? "unassigned"} · ${item.error ?? sessionStatus(item).slice(2)}${item.unread ? " · unread output" : ""}`}
             onClick={() => {
               run("root.switch", item.id);
             }}
           >
-            <span aria-label={item.error ?? (item.needsInput ? "needs you" : item.status)}>
-              {sessionStatus(item)}
+            <span
+              class={item.status === "working" ? "session-running" : ""}
+              aria-label={sessionStatus(item).slice(2)}
+            >
+              {sessionStatus(item)[0]}
             </span>
-            <span>
-              {item.label || "New session"} - {item.directory?.directoryType ?? "unassigned"}
+            <span class={item.unread ? "session-name unread-output" : "session-name"}>
+              {threadLabel(item.label)} - {item.directory?.directoryType ?? "unassigned"}
             </span>
+            {item.unread ? (
+              <span class="session-unread" aria-label="Unread output">
+                ●
+              </span>
+            ) : null}
           </button>
           {all.some((each) => visible.has(each.id) && each.spawnedBy === item.id) ? (
             <ul>{rows(item.id)}</ul>
@@ -295,7 +451,8 @@ export function Sessions() {
       ));
   }
   return (
-    <nav class="sessions" aria-label="Live agent sessions">
+    <nav id="sessions" class="sessions" aria-label="Live agent sessions">
+      {children}
       <header>
         <button
           type="button"

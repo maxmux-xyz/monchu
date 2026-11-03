@@ -124,7 +124,7 @@ describe("roots in clients", () => {
     expect(ARCHIVE_HELP).toContain("Nothing is deleted");
   });
 
-  it("parses /roots without ever taking a subcommand for an id", () => {
+  it("parses /threads without ever taking a subcommand for an id", () => {
     expect(parseRootsCommand("")).toEqual({ kind: "list" });
     expect(parseRootsCommand("kq")).toEqual({ kind: "switch", prefix: "kq" });
     expect(parseRootsCommand("new")).toEqual({ kind: "new" });
@@ -143,6 +143,6 @@ describe("roots in clients", () => {
       archived: false,
     });
     for (const invalid of ["new x", "unarchive", "archive a b", "kq x", "abc"])
-      expect(() => parseRootsCommand(invalid)).toThrow("Usage: /roots");
+      expect(() => parseRootsCommand(invalid)).toThrow("Usage: /threads");
   });
 });

@@ -20,7 +20,13 @@ export type SessionDirectory = {
   agentRole: "head" | "worker";
 };
 
-export type NewSession = SessionDirectory & { name: string; brief?: string };
+export type CheckoutBranches = { provider: string; branches: string[]; current: string };
+
+export type NewSession = SessionDirectory & {
+  name: string;
+  brief?: string;
+  worktree?: { provider: string; branch: string };
+};
 
 export const SessionInput = Type.Object(
   {
@@ -31,9 +37,35 @@ export const SessionInput = Type.Object(
     repoPath: Type.String({ minLength: 1 }),
     codeDirectory: Type.String({ minLength: 1 }),
     ownedDirectory: Type.String({ minLength: 1 }),
+    worktree: Type.Optional(
+      Type.Object(
+        {
+          provider: Type.String({ minLength: 1 }),
+          branch: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
+
+export const SESSION_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export const BranchOptions = Type.Object({
+  parent: Type.String({ minLength: 1 }),
+  model: Type.Optional(Type.Object({ provider: Type.String(), modelId: Type.String() })),
+  thinkingLevel: Type.Optional(Type.Enum(SESSION_THINKING_LEVELS)),
+});
+export type BranchOptions = import("typebox").Static<typeof BranchOptions>;
 
 export type DirectoryListing = {
   path: string;

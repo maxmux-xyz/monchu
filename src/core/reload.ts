@@ -429,7 +429,7 @@ export class Extensions {
   }
 
   /** What the last build's plugins add to the front, `/login` and the clients. */
-  get plugin(): Pick<PluginBuild, "logins" | "wants" | "front" | "pages"> {
+  get plugin(): Pick<PluginBuild, "logins" | "wants" | "front" | "pages" | "checkouts"> {
     return this.current.plugins;
   }
 

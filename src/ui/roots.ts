@@ -60,7 +60,7 @@ export function rootCounts(root: Pick<RootSummary, "workers" | "jobs">): string 
 export const ARCHIVE_HELP =
   "Archive hides a root from this list, the indicator and plain monchu. Its history, workers, goals and jobs stay; resume it by id or here, and typing in it unarchives it. Nothing is deleted. A working root can't be archived.";
 
-/** What `/roots` asks for: the list, a switch by prefix, a new root, a label for the shown root, or (un)archiving one. */
+/** What `/threads` asks for: the list, a switch by prefix, a new root, a label for the shown root, or (un)archiving one. */
 export type RootsCommand =
   | { kind: "list" }
   | { kind: "switch"; prefix: string }
@@ -68,7 +68,7 @@ export type RootsCommand =
   | { kind: "rename"; label: string }
   | { kind: "archive"; prefix: string | undefined; archived: boolean };
 
-/** Parses `/roots` arguments; ids are letters `k`-`z`, so no subcommand is ever taken for one. */
+/** Parses `/threads` arguments; ids are letters `k`-`z`, so no subcommand is ever taken for one. */
 export function parseRootsCommand(text: string): RootsCommand {
   const [word = "", ...rest] = text.trim().split(/\s+/).filter(Boolean);
   const tail = text.trim().slice(word.length).trim();
@@ -87,5 +87,5 @@ export function parseRootsCommand(text: string): RootsCommand {
     default:
       if (rest.length === 0 && /^[k-z]+$/.test(word)) return { kind: "switch", prefix: word };
   }
-  throw new Error("Usage: /roots [id|new|rename <label>|archive [id]|unarchive <id>]");
+  throw new Error("Usage: /threads [id|new|rename <label>|archive [id]|unarchive <id>]");
 }

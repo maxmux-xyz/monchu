@@ -14,10 +14,12 @@ import type { ConversationView, EntryRecord, ModelRef } from "@earendil-works/pi
 import type { Attachment } from "./attachments.ts";
 import type {
   DirectoryCatalog,
+  CheckoutBranches,
   DirectoryFile,
   DirectoryListing,
   FolderListing,
   NewSession,
+  BranchOptions,
   SessionDirectory,
 } from "./directories.ts";
 import type { Goal } from "../core/agents/goals.ts";
@@ -124,6 +126,8 @@ export type RootSummary = {
   jobs: { running: number; scheduled: number };
   directory?: SessionDirectory;
   spawnedBy?: string;
+  preparing?: boolean;
+  unread?: boolean;
   needsInput?: boolean;
   error?: string;
 };
@@ -247,7 +251,9 @@ export interface Client {
   /** Browse folders on the host; relative paths resolve against base or the Monchu home. */
   browseFolders(path: string, base?: string, query?: string): Promise<FolderListing>;
   discoverDirectories(path: string): Promise<DirectoryCatalog>;
-  createSession(input: NewSession, requestId: string): Promise<string>;
+  checkoutBranches(path: string): Promise<CheckoutBranches>;
+  createSession(input: NewSession, requestId: string, branch?: BranchOptions): Promise<string>;
+  retrySessionSetup(id: string, useExisting?: boolean): Promise<void>;
   assignDirectory(id: string, input: NewSession): Promise<void>;
   listDirectory(id: string, path: string): Promise<DirectoryListing>;
   readDirectoryFile(id: string, path: string): Promise<DirectoryFile>;

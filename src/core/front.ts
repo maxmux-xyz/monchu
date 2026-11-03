@@ -40,7 +40,7 @@ import {
 } from "../api/notices.ts";
 import { attachedInput, storeAttachment, writeUpload, type ImageInput } from "./attachments.ts";
 import { GoalsDoc, GOALS_COMPACTION_FOCUS, type Goal } from "./agents/goals.ts";
-import { rootRecord, RootsDoc, type RootRecord } from "./agents/root-records.ts";
+import { FrontPicks, rootRecord, RootsDoc, type RootRecord } from "./agents/root-records.ts";
 import { pinMessage, type PinnedMessage } from "./pins.ts";
 import { noteInput, sendHandOff } from "./agents/roots.ts";
 import {
@@ -74,19 +74,6 @@ const HISTORY_BYTES = 1024 * 1024;
 function isEntryId(value: number): value is EntryId {
   return Number.isSafeInteger(value) && value > 0;
 }
-
-/**
- * Which of a root's model fields were picked for this conversation only. Startup and reload apply `config.front`
- * to the other fields; saving a field as the default clears its pick.
- */
-const FrontPicks = defineDoc<{ model: boolean; thinkingLevel: boolean }>({
-  kind: "monchu.front-picks",
-  version: 1,
-  scope: "conversation",
-  history: "latest",
-  fork: "initial",
-  initial: () => ({ model: false, thinkingLevel: false }),
-});
 
 /**
  * When the user last opened each goal, as that goal's `updatedAt`, by goal ID. Goals that existed when it was first
@@ -300,15 +287,17 @@ export class Front implements RootClient {
     if ((!message.trim() && attachments.length === 0) || !requestId.trim())
       throw new Error("Message and request ID are required");
     const front = await this.conversation();
+    const session = (await this.host.harness.snapshot(RootsDoc, context))?.roots.find(
+      (item) => item.id === front.id,
+    );
+    if (session?.preparing) throw new Error("This session is preparing its workspace");
     await front.commit(
       (tx) => noteInput(tx, front.id, message || attachments.map(({ name }) => name).join(", ")),
       context,
     );
     // Plugins see the text first, with the front's context as it was before it; one may change or take it.
     let messages: ReturnType<InputEvent["messages"]> | undefined;
-    const directory = (await this.host.harness.snapshot(RootsDoc, context))?.roots.find(
-      (item) => item.id === front.id,
-    )?.directory;
+    const directory = session?.directory;
     const openAsks =
       directory === undefined
         ? []

@@ -195,7 +195,7 @@ export function RootsSheet({ open }: { open: Sheet }) {
     <SheetView
       open={open}
       spec={ROOTS}
-      label={filter === "archived" ? "archived roots" : "roots"}
+      label={filter === "archived" ? "archived threads" : "threads"}
       class="rootsMenu"
       actions={
         <>
@@ -247,7 +247,7 @@ export function RootsSheet({ open }: { open: Sheet }) {
 /** + right of the filter, in send's place. */
 export function RootsNew() {
   return (
-    <Key class="icon" label="new root" title="new root (spc n)" onPress={newRoot}>
+    <Key class="icon" label="new thread" title="new thread (spc n)" onPress={newRoot}>
       +
     </Key>
   );

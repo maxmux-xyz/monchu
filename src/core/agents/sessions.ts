@@ -1,3 +1,5 @@
+import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   configure,
   defineExtension,
@@ -9,24 +11,36 @@ import {
   type Extension,
   type Tx,
 } from "@earendil-works/pi-durable";
-import { SessionInput, type NewSession, type SessionDirectory } from "../../api/directories.ts";
+import {
+  SessionInput,
+  type BranchOptions,
+  type NewSession,
+  type SessionDirectory,
+} from "../../api/directories.ts";
 import { shortId } from "../../api/ids.ts";
 import type { MonchuConfig } from "../config.ts";
+import type { CheckoutProvider } from "../../plugin.ts";
 import { readDirectoryFile, resolveSession } from "../directories.ts";
 import { preloadGroups } from "../tools/tool-search.ts";
-import { rootRecord, RootsDoc, type RootRecord } from "./root-records.ts";
+import { FrontPicks, rootRecord, RootsDoc, type RootRecord } from "./root-records.ts";
 
 export const SESSION_INSTRUCTIONS =
   "You are a directory-owning coding agent, directly available to the human in this session. Maintain your owned work records according to their directory rules, and do authorized work in the source checkout. A head may start_session when the human asks for independent work; a worker cannot spawn agents. Spawning is fire and forget: never wait for, monitor, collect reports from, or automatically message children or parents. Do not use legacy worker-routing tools. Your final answer belongs here. When waiting for a human decision, start your final answer with 'ask: ' so this session shows that it needs input. Keep the chat responsive and distinguish accepted work from completed work.";
 
-export function checkDirectoryOwner(roots: readonly RootRecord[], input: SessionDirectory): void {
+export function checkDirectoryOwner(
+  roots: readonly RootRecord[],
+  input: SessionDirectory,
+  preparing = false,
+): void {
   const live = roots.filter((item) => !item.archived);
   if (live.some((item) => item.directory?.ownedDirectory === input.ownedDirectory))
     throw new Error("This directory already has a live session; resume it instead");
   if (
+    !preparing &&
     (input.directoryType === "task" || input.directoryType === "experimental") &&
     live.some(
       (item) =>
+        !item.checkoutPending &&
         item.directory?.codeDirectory === input.codeDirectory &&
         (item.directory.directoryType === "task" ||
           item.directory.directoryType === "experimental"),
@@ -35,46 +49,97 @@ export function checkDirectoryOwner(roots: readonly RootRecord[], input: Session
     throw new Error("A code-writing session already owns this checkout; use a separate checkout");
 }
 
-const Kickoff = defineTask<NewSession, { phase: "prepare" } | { phase: "submit" }, null>({
-  name: "monchu.session-kickoff",
-  version: 1,
-  initial: () => ({ phase: "prepare" }),
-  phases: {
-    prepare: async (task, runtime, context) => {
-      await readDirectoryFile(task.input.ownedDirectory, "instruction.md");
-      await runtime.commit(() => ({ status: "running", checkpoint: { phase: "submit" } }), context);
+function kickoff(home: string, providers: ReadonlyMap<string, CheckoutProvider>) {
+  return defineTask<
+    NewSession & { checkoutRequest?: string; scaffold?: true },
+    { phase: "prepare" } | { phase: "submit" },
+    null
+  >({
+    name: "monchu.session-kickoff",
+    version: 1,
+    initial: () => ({ phase: "prepare" }),
+    phases: {
+      prepare: async (task, runtime, context) => {
+        const requestId = task.input.checkoutRequest;
+        if (task.input.scaffold) {
+          const directory = task.input.ownedDirectory;
+          await mkdir(directory, { recursive: true });
+          if ((await realpath(directory)) !== directory)
+            throw new Error("The workspace path changed during setup");
+          await writeFile(
+            join(directory, "instruction.md"),
+            `# ${task.input.name}\n\n${task.input.brief ?? ""}\n`,
+            { flag: "wx" },
+          ).catch((error: unknown) => {
+            if (!(error instanceof Error && "code" in error && error.code === "EEXIST"))
+              throw error;
+          });
+        }
+        const prepared =
+          requestId === undefined
+            ? undefined
+            : await resolveSession(task.input, home, { home, providers, requestId });
+        await readDirectoryFile(task.input.ownedDirectory, "instruction.md");
+        await runtime.commit(async (tx) => {
+          if (prepared !== undefined) {
+            const state = await tx.doc(RootsDoc);
+            const root = rootRecord(state, runtime.conversationId);
+            if (root?.directory === undefined) throw new Error("Session directory is missing");
+            checkDirectoryOwner(
+              state.roots.filter((item) => item.id !== root.id),
+              prepared,
+            );
+            root.directory.codeDirectory = prepared.codeDirectory;
+            delete root.checkoutPending;
+            await configure(tx, root.id, { cwd: prepared.codeDirectory });
+          }
+          return { status: "running", checkpoint: { phase: "submit" } };
+        }, context);
+      },
+      submit: async (task, runtime, context) => {
+        const conversation = await runtime.conversation(runtime.conversationId, context);
+        if (conversation === undefined) throw new Error("Session conversation is missing");
+        await conversation.submit(
+          {
+            type: "input",
+            content:
+              task.input.brief ??
+              "Read instruction.md and the current files in your owned directory. Summarize the current state and next step. Ask before starting new work.",
+            requestId: `session-brief:${task.input.checkoutRequest ?? task.id}`,
+          },
+          context,
+        );
+        await runtime.commit(async (tx) => {
+          if (task.input.checkoutRequest !== undefined) {
+            const root = rootRecord(await tx.doc(RootsDoc), runtime.conversationId);
+            if (root !== undefined) delete root.preparing;
+          }
+          return { status: "terminal", outcome: { status: "completed", result: null } };
+        }, context);
+      },
     },
-    submit: async (task, runtime, context) => {
-      const conversation = await runtime.conversation(runtime.conversationId, context);
-      if (conversation === undefined) throw new Error("Session conversation is missing");
-      await conversation.submit(
-        {
-          type: "input",
-          content:
-            task.input.brief ??
-            "Read instruction.md and the current files in your owned directory. Summarize the current state and next step. Ask before starting new work.",
-          requestId: `session-brief:${task.id}`,
-        },
-        context,
-      );
-      await runtime.commit(
-        () => ({ status: "terminal", outcome: { status: "completed", result: null } }),
-        context,
-      );
-    },
-  },
-  abort: (_task, runtime, context) =>
-    runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
-});
+    abort: (_task, runtime, context) =>
+      runtime.commit(() => ({ status: "terminal", outcome: { status: "aborted" } }), context),
+  });
+}
+
+export const Kickoff = kickoff("", new Map());
+
+export async function resolveSessionForOpen(input: NewSession, base: string, branch = false) {
+  const { worktree, ...directory } = input;
+  const resolved = await resolveSession(directory, base, undefined, branch);
+  return worktree === undefined ? resolved : { ...resolved, worktree };
+}
 
 export async function createSession(
   tx: Tx,
-  input: NewSession,
+  input: NewSession & { scaffold?: true },
   requestId: string,
   config: MonchuConfig,
   extensions: readonly Extension[],
   preload: readonly string[],
   parent?: ConversationId,
+  picks?: Pick<BranchOptions, "model" | "thinkingLevel">,
 ): Promise<ConversationId> {
   if (!requestId.trim()) throw new Error("A request ID is required");
   const state = await tx.doc(RootsDoc);
@@ -82,21 +147,31 @@ export async function createSession(
     throw new Error("Only a directory-bound head can spawn a session");
   const previous = state.roots.find((item) => item.requestId === requestId);
   if (previous !== undefined) return previous.id;
-  checkDirectoryOwner(state.roots, input);
+  const preparing = input.worktree !== undefined || input.scaffold === true;
+  checkDirectoryOwner(state.roots, input, input.worktree !== undefined);
   const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
   const role = input.agentRole === "head" ? config.front : config.worker;
   await configure(tx, conversation.id, {
     cwd: input.codeDirectory,
-    model: { provider: role.provider, modelId: role.modelId },
-    thinkingLevel: role.thinkingLevel,
+    model: picks?.model ?? { provider: role.provider, modelId: role.modelId },
+    thinkingLevel: picks?.thinkingLevel ?? role.thinkingLevel,
     instructions: SESSION_INSTRUCTIONS,
     extensions: { add: extensions },
   });
+  if (picks?.model !== undefined || picks?.thinkingLevel !== undefined) {
+    const state = await tx.doc(FrontPicks, conversation.id);
+    state.model = picks.model !== undefined;
+    state.thinkingLevel = picks.thinkingLevel !== undefined;
+  }
   await preloadGroups(tx, conversation.id, preload);
-  const startupTask = await tx.createTask(Kickoff, input, {
-    conversationId: conversation.id,
-    ownership: { kind: "conversation" },
-  });
+  const startupTask = await tx.createTask(
+    Kickoff,
+    preparing ? { ...input, checkoutRequest: requestId } : input,
+    {
+      conversationId: conversation.id,
+      ownership: { kind: "conversation" },
+    },
+  );
   state.roots.push({
     id: conversation.id,
     label: input.name,
@@ -111,6 +186,8 @@ export async function createSession(
       agentRole: input.agentRole,
     },
     startupTask,
+    ...(preparing ? { preparing: true } : {}),
+    ...(input.worktree === undefined ? {} : { checkoutPending: true }),
     ...(parent === undefined ? {} : { spawnedBy: parent }),
   });
   return conversation.id;
@@ -135,18 +212,25 @@ export function createSessions(
   config: () => MonchuConfig,
   extensions: readonly Extension[],
   preload: readonly string[],
+  home: string,
+  providers: ReadonlyMap<string, CheckoutProvider>,
 ) {
   return defineExtension({
     name: "monchu.sessions",
-    tasks: [Kickoff],
+    tasks: [kickoff(home, providers)],
     hooks: [
       hook(ToolTask, {
         beforeTool: async (call, api, context) => {
-          if (call.name !== "start_session" && !CREW_TOOLS.has(call.name)) return;
+          if (
+            call.name !== "propose_subthread" &&
+            call.name !== "start_session" &&
+            !CREW_TOOLS.has(call.name)
+          )
+            return;
           const roots = await api.snapshot(RootsDoc, context);
           const directory =
             roots === undefined ? undefined : rootRecord(roots, api.conversationId)?.directory;
-          if (call.name === "start_session") {
+          if (call.name === "start_session" || call.name === "propose_subthread") {
             if (directory?.agentRole !== "head")
               return { block: "Only a directory-bound head can spawn a session" };
             return;
@@ -169,13 +253,26 @@ export function createSessions(
         executionMode: "sequential",
         execute: async (args, api, context) => {
           const current = await api.agent(context);
-          const input = await resolveSession(args, current.cwd ?? ".");
+          const requestId = `session:${api.taskId}:${api.callId}`;
+          const previous = (await api.snapshot(RootsDoc, context))?.roots.find(
+            (item) => item.requestId === requestId,
+          );
+          if (previous !== undefined)
+            return {
+              output: [
+                {
+                  type: "text",
+                  text: `Opened ${previous.label} (${shortId(previous.id)}). It runs independently and is available directly in the session tree.`,
+                },
+              ],
+            };
+          const input = await resolveSessionForOpen(args, current.cwd ?? ".");
           const id = await api.commit(
             (tx) =>
               createSession(
                 tx,
                 input,
-                `session:${api.taskId}:${api.callId}`,
+                requestId,
                 config(),
                 extensions,
                 preload,

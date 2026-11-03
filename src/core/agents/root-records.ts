@@ -18,6 +18,8 @@ export type RootRecord = {
   directory?: SessionDirectory;
   spawnedBy?: ConversationId;
   startupTask?: TaskId;
+  preparing?: true;
+  checkoutPending?: true;
 };
 
 /** Every root of the home, in creation order. The first is Durable's reserved root. */
@@ -26,6 +28,19 @@ export const RootsDoc = defineDoc<{ roots: RootRecord[] }>({
   version: 1,
   scope: "session",
   initial: () => ({ roots: [] }),
+});
+
+/**
+ * Which of a root's model fields were picked for this conversation only. Startup and reload apply `config.front`
+ * to the other fields; saving a field as the default clears its pick.
+ */
+export const FrontPicks = defineDoc<{ model: boolean; thinkingLevel: boolean }>({
+  kind: "monchu.front-picks",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ model: false, thinkingLevel: false }),
 });
 
 export function rootRecord(

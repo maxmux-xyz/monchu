@@ -1,5 +1,5 @@
 /**
- * A menu that opens from the bottom over the editor (`/roots`): one line per row, an action bar over the filter, and
+ * A menu that opens from the bottom over the editor (`/threads`): one line per row, an action bar over the filter, and
  * the filter between ✕ back and the menu's primary cell. The editor's box filters it while the draft waits, so the box
  * never moves and a touch keyboard stays up. A tap selects a row, a tap on the selected row or › takes it.
  *

@@ -29,6 +29,7 @@ import {
   mode,
   notice,
   roots,
+  rootId,
   sheet,
   filterSheet,
   updateSheet,
@@ -78,10 +79,12 @@ const sheets = signal<typeof import("./panels.tsx").SHEETS | undefined>(undefine
 export function Editor() {
   const selected = useSignal(0);
   const closed = useSignal(false);
+  const mirror = useRef<HTMLDivElement>(null);
   const area = useRef<HTMLTextAreaElement>(null);
   const picking = choice.value;
   // A menu over the editor gives way to a pick or question it opened, such as a rename.
   const sheetOpen = picking === undefined ? sheet.value : undefined;
+  const sheetLabel = sheetOpen?.kind === "roots" ? "threads" : sheetOpen?.kind;
   const kind = sheetOpen === undefined ? undefined : sheets.value?.[sheetOpen.kind];
   useEffect(() => {
     if (sheetOpen === undefined || sheets.peek() !== undefined) return;
@@ -132,6 +135,11 @@ export function Editor() {
 
   const attach = (files: Iterable<File>) => addFiles(files, attachFile);
   const send = () => {
+    const pending = roots.peek().find((item) => item.id === rootId.peek() && item.preparing);
+    if (pending) {
+      notice(pending.error ?? "Preparing workspace", "warning");
+      return;
+    }
     const text = draft.value;
     closed.value = false;
     if (editing.value !== undefined) return void run("edit.save", text);
@@ -170,6 +178,11 @@ export function Editor() {
       ? list.value.items
       : (picking.rows?.(query.value) ?? matching(picking.options, query.value));
   const menu = (picking === undefined && items.length > 0) || sheetOpen !== undefined;
+  const formatted = !menu && picking === undefined && /[*_`~#[]/.test(draft.value);
+  const syncScroll = () => {
+    if (mirror.current && area.current) mirror.current.scrollTop = area.current.scrollTop;
+  };
+  useLayoutEffect(syncScroll, [draft.value, formatted]);
   useEffect(() => {
     setMenuOpen(menu);
   }, [menu]);
@@ -251,125 +264,143 @@ export function Editor() {
       {/* One line, so the box keeps its element when a menu adds its back and primary cells around it. */}
       <div class="line">
         {sheetOpen !== undefined ? <SheetBack /> : null}
-        <textarea
-          ref={area}
-          class={
-            sheetOpen !== undefined
-              ? `sheetFilter${sheetOpen.normal ? " normal" : ""}`
-              : mode.value === "steer" && picking === undefined
-                ? "steer"
-                : ""
-          }
-          rows={1}
-          value={
-            sheetOpen !== undefined
-              ? sheetOpen.query
-              : picking === undefined
-                ? draft.value
-                : query.value
-          }
-          aria-label={
-            sheetOpen !== undefined
-              ? `filter: ${sheetOpen.kind}`
-              : picking === undefined
-                ? "message"
-                : `filter: ${picking.title}`
-          }
-          onFocus={() => {
-            if (sheetOpen?.normal === true) updateSheet({ normal: false, chord: undefined });
-          }}
-          placeholder={
-            sheetOpen !== undefined
-              ? sheetOpen.kind
-              : picking !== undefined
-                ? "type to filter"
-                : linkError.value !== undefined
-                  ? `not connected · ${linkError.value}`
-                  : connection.value === "gone"
-                    ? "not connected · reloading once Monchu answers"
-                    : connection.value !== "live" && connection.value !== "connecting"
-                      ? "not connected · reconnecting"
-                      : editing.value === undefined
-                        ? "message"
-                        : "queued message"
-          }
-          autofocus
-          onBlur={() => {
-            // Leaving for elsewhere on the page ends a slash command begun from it; leaving the window doesn't.
-            if (document.hasFocus()) takeCommandLine();
-          }}
-          onInput={(event) => {
-            if (sheetOpen !== undefined) return filterSheet(event.currentTarget.value);
-            if (picking !== undefined) {
-              query.value = event.currentTarget.value;
+        <div class="draft-input">
+          {formatted ? (
+            <div ref={mirror} class="draft-format" aria-hidden="true">
+              {draft.value
+                .split(
+                  /(^ {0,3}(?:```|~~~)[^\n]*\n[\s\S]*?(?:^ {0,3}(?:```|~~~)[^\n]*$|(?![\s\S]))|^#{1,6} +[^\n]+|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|~~[^~\n]+~~|\[[^\]\n]+\]\([^\s)]+\))/m,
+                )
+                .map((part, index) => {
+                  if (index % 2 === 0) return part;
+                  if (/^ {0,3}(?:`|~{3})/.test(part)) return <code>{part}</code>;
+                  if (/^(?:#|\*\*|__)/.test(part)) return <strong>{part}</strong>;
+                  if (part.startsWith("~~")) return <s>{part}</s>;
+                  if (part.startsWith("[")) return <u>{part}</u>;
+                  return <em>{part}</em>;
+                })}
+              {"\u200b"}
+            </div>
+          ) : null}
+          <textarea
+            ref={area}
+            onScroll={syncScroll}
+            class={
+              sheetOpen !== undefined
+                ? `sheetFilter${sheetOpen.normal ? " normal" : ""}`
+                : `${mode.value === "steer" && picking === undefined ? "steer" : ""}${formatted ? " markdown-input" : ""}`
+            }
+            rows={1}
+            value={
+              sheetOpen !== undefined
+                ? sheetOpen.query
+                : picking === undefined
+                  ? draft.value
+                  : query.value
+            }
+            aria-label={
+              sheetLabel !== undefined
+                ? `filter: ${sheetLabel}`
+                : picking === undefined
+                  ? "message"
+                  : `filter: ${picking.title}`
+            }
+            onFocus={() => {
+              if (sheetOpen?.normal === true) updateSheet({ normal: false, chord: undefined });
+            }}
+            placeholder={
+              sheetLabel !== undefined
+                ? sheetLabel
+                : picking !== undefined
+                  ? "type to filter"
+                  : linkError.value !== undefined
+                    ? `not connected · ${linkError.value}`
+                    : connection.value === "gone"
+                      ? "not connected · reloading once Monchu answers"
+                      : connection.value !== "live" && connection.value !== "connecting"
+                        ? "not connected · reconnecting"
+                        : editing.value === undefined
+                          ? "message"
+                          : "queued message"
+            }
+            autofocus
+            onBlur={() => {
+              // Leaving for elsewhere on the page ends a slash command begun from it; leaving the window doesn't.
+              if (document.hasFocus()) takeCommandLine();
+            }}
+            onInput={(event) => {
+              if (sheetOpen !== undefined) return filterSheet(event.currentTarget.value);
+              if (picking !== undefined) {
+                query.value = event.currentTarget.value;
+                selected.value = 0;
+                return;
+              }
+              forgetRetry();
+              setDraft(event.currentTarget.value);
               selected.value = 0;
-              return;
-            }
-            forgetRetry();
-            setDraft(event.currentTarget.value);
-            selected.value = 0;
-            closed.value = false;
-          }}
-          onKeyDown={(event) => {
-            // Keys while an input method composes are its own (Esc there cancels the composition, not the run).
-            if (event.isComposing || event.keyCode === 229) return;
-            if (sheetOpen !== undefined) {
-              if (kind !== undefined && filterKey(event, kind.spec)) event.preventDefault();
-              return;
-            }
-            if (items.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-              event.preventDefault();
-              selected.value =
-                (selected.value + (event.key === "ArrowDown" ? 1 : items.length - 1)) %
-                items.length;
-              return;
-            }
-            if (picking !== undefined) {
-              const item = items[selected.value];
+              closed.value = false;
+            }}
+            onKeyDown={(event) => {
+              // Keys while an input method composes are its own (Esc there cancels the composition, not the run).
+              if (event.isComposing || event.keyCode === 229) return;
+              if (sheetOpen !== undefined) {
+                if (kind !== undefined && filterKey(event, kind.spec)) event.preventDefault();
+                return;
+              }
+              if (items.length > 0 && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                event.preventDefault();
+                selected.value =
+                  (selected.value + (event.key === "ArrowDown" ? 1 : items.length - 1)) %
+                  items.length;
+                return;
+              }
+              if (picking !== undefined) {
+                const item = items[selected.value];
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  picking.cancel();
+                } else if (event.key === "Enter" && event.shiftKey && !event.isComposing) {
+                  event.preventDefault();
+                  if (picking.alternate !== undefined) take(item, true);
+                } else if (
+                  event.key === "Tab" ||
+                  (event.key === "Enter" && !event.shiftKey && !event.isComposing)
+                ) {
+                  event.preventDefault();
+                  take(item);
+                }
+                return;
+              }
+              if (items.length > 0 && event.key === "Tab") {
+                event.preventDefault();
+                const item = items[selected.value];
+                if (item !== undefined) accept(item);
+                return;
+              }
               if (event.key === "Escape") {
                 event.preventDefault();
-                picking.cancel();
-              } else if (event.key === "Enter" && event.shiftKey && !event.isComposing) {
-                event.preventDefault();
-                if (picking.alternate !== undefined) take(item, true);
-              } else if (
-                event.key === "Tab" ||
-                (event.key === "Enter" && !event.shiftKey && !event.isComposing)
-              ) {
-                event.preventDefault();
-                take(item);
+                const line = takeCommandLine();
+                if (line !== undefined) {
+                  setDraft(line.draft);
+                  if (!line.fromPrompt) event.currentTarget.blur();
+                } else if (items.length > 0) closed.value = true;
+                else if (editing.value !== undefined) run("edit.leave");
+                else if (escapeLeaves.value) event.currentTarget.blur();
+                else run("stop");
+                return;
               }
-              return;
-            }
-            if (items.length > 0 && event.key === "Tab") {
-              event.preventDefault();
-              const item = items[selected.value];
-              if (item !== undefined) accept(item);
-              return;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              const line = takeCommandLine();
-              if (line !== undefined) {
-                setDraft(line.draft);
-                if (!line.fromPrompt) event.currentTarget.blur();
-              } else if (items.length > 0) closed.value = true;
-              else if (editing.value !== undefined) run("edit.leave");
-              else if (escapeLeaves.value) event.currentTarget.blur();
-              else run("stop");
-              return;
-            }
-            if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-              const item = items[selected.value];
-              // A touch keyboard has no Shift: its Enter adds a line, and the Send button sends.
-              if (item === undefined && matchMedia("(pointer: coarse)").matches) return;
-              event.preventDefault();
-              // A half-typed command takes the suggestion; an exact one, or one with arguments, is sent as typed.
-              if (item !== undefined && item.id !== draft.value.trim()) accept(item);
-              else send();
-            }
-          }}
-        />
+              if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.isComposing) {
+                const item = items[selected.value];
+                // A touch keyboard has no Shift: its Enter adds a line, and the Send button sends.
+                if (item === undefined && matchMedia("(pointer: coarse)").matches) return;
+                event.preventDefault();
+                // A half-typed command takes the suggestion; an exact one, or one with arguments, is sent as typed.
+                if (item !== undefined && item.id !== draft.value.trim()) accept(item);
+                else send();
+              }
+            }}
+          />
+        </div>
         {kind?.Primary === undefined ? null : <kind.Primary />}
         {sheetOpen !== undefined ? null : picking !== undefined ? (
           <PickKeys

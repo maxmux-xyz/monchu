@@ -1,3 +1,4 @@
+import { Check } from "typebox/value";
 import type { Host } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
@@ -37,14 +38,20 @@ import type {
 } from "../api/client.ts";
 import type { Principal } from "../api/contract.ts";
 import { shortId } from "../api/ids.ts";
-import type { NewSession } from "../api/directories.ts";
-import { checkDirectoryOwner, createSession as createDirectorySession } from "./agents/sessions.ts";
+import { SessionInput, type BranchOptions, type NewSession } from "../api/directories.ts";
+import {
+  checkDirectoryOwner,
+  Kickoff,
+  createSession as createDirectorySession,
+  resolveSessionForOpen,
+} from "./agents/sessions.ts";
 import {
   listDirectory,
   browseFolders,
   discoverDirectories,
   readDirectoryFile,
   resolveSession,
+  checkoutBranches,
 } from "./directories.ts";
 import { parseRelease, type Release } from "../api/release.ts";
 import { systemNoticeText } from "../api/notices.ts";
@@ -769,9 +776,24 @@ export class Monchu implements Client {
     return shortId(id);
   }
 
-  async createSession(input: NewSession, requestId: string): Promise<string> {
+  async createSession(
+    input: NewSession,
+    requestId: string,
+    branch?: BranchOptions,
+  ): Promise<string> {
     if (this.closing !== undefined) throw new Error("Monchu is closing");
-    const resolved = await resolveSession(input, this.home);
+    if (!requestId.trim()) throw new Error("A request ID is required");
+    const previous = (await this.records()).find((item) => item.requestId === requestId);
+    if (previous !== undefined) return shortId(previous.id);
+    const parent = branch === undefined ? undefined : findRoot(await this.records(), branch.parent);
+    const agent =
+      parent === undefined
+        ? undefined
+        : await (await this.root(shortId(parent.id)).conversation()).agent(context);
+    const model = branch?.model ?? agent?.model;
+    const thinkingLevel = branch?.thinkingLevel ?? agent?.thinkingLevel;
+    if (model !== undefined) this.checkPick({ model });
+    const resolved = await resolveSessionForOpen(input, this.home, branch !== undefined);
     const id = await this.harness.commit(
       (tx) =>
         createDirectorySession(
@@ -781,11 +803,47 @@ export class Monchu implements Client {
           this.extensions.config,
           this.extensions.root,
           this.extensions.preload,
+          parent?.id,
+          {
+            ...(model === undefined ? {} : { model }),
+            ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+          },
         ),
       context,
     );
     this.harness.resume();
     return shortId(id);
+  }
+
+  async retrySessionSetup(id: string, useExisting = false): Promise<void> {
+    const root = findRoot(await this.records(), id);
+    if (!root.preparing || root.startupTask === undefined) return;
+    const task = await this.harness.getTask(root.startupTask, context);
+    if (task?.state.status !== "terminal" || task.state.outcome.status === "completed") return;
+    const input = task.input;
+    if (typeof input !== "object" || input === null || Array.isArray(input))
+      throw new Error("Missing workspace setup");
+    const { checkoutRequest, scaffold, ...directory } = input;
+    if (typeof checkoutRequest !== "string" || !Check(SessionInput, directory))
+      throw new Error("Invalid workspace setup");
+    const { worktree, ...existing } = directory;
+    if (useExisting && (worktree === undefined || existing.codeDirectory === existing.repoPath))
+      throw new Error("No separate existing checkout was supplied for this session");
+    const setup = useExisting ? existing : directory;
+    await this.harness.commit(async (tx) => {
+      const current = findRoot((await tx.doc(RootsDoc)).roots, id);
+      if (!current.preparing || current.startupTask !== root.startupTask || current.archived)
+        return;
+      current.startupTask = await tx.createTask(
+        Kickoff,
+        { ...setup, checkoutRequest, ...(scaffold === true ? { scaffold: true } : {}) },
+        {
+          conversationId: current.id,
+          ownership: { kind: "conversation" },
+        },
+      );
+    }, context);
+    this.harness.resume();
   }
 
   async assignDirectory(id: string, input: NewSession): Promise<void> {
@@ -843,6 +901,10 @@ export class Monchu implements Client {
 
   discoverDirectories(path: string) {
     return discoverDirectories(path, this.home);
+  }
+
+  checkoutBranches(path: string) {
+    return checkoutBranches(path, this.home, this.extensions.plugin.checkouts);
   }
 
   private async ownedDirectory(id: string): Promise<string> {

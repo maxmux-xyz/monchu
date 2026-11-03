@@ -1,9 +1,11 @@
 import { defineExtension, section } from "@earendil-works/pi-durable";
-import { open, opendir, readdir, realpath } from "node:fs/promises";
+import { open, opendir, readdir, realpath, mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DIRECTORY_TYPES } from "../api/directories.ts";
 import type {
   DirectoryCatalog,
+  CheckoutBranches,
   DirectoryFile,
   DirectoryListing,
   FolderListing,
@@ -13,6 +15,7 @@ import type {
 } from "../api/directories.ts";
 import { rootRecord, RootsDoc } from "./agents/root-records.ts";
 import { resolveDirectory } from "./workdir.ts";
+import type { CheckoutProvider } from "../plugin.ts";
 
 const RULES: Record<DirectoryType, string> = {
   task: "Deliver a bounded change. Define scope and Done When in instruction.md. Complete plan.md before implementation; leave progress.md empty until implementation begins. Then keep current state, next step, blockers, and verification current. Follow staged → ready → in-progress → verify → archive. Staged work needs human approval to start. Merged is not deployed or verified. Preserve the folder name when moving it.",
@@ -30,7 +33,25 @@ const RULES: Record<DirectoryType, string> = {
     "Maintain one tracker per open role or requisition. instruction.md defines the role, scope, hiring stages, owners, sources, and closing condition. pipeline.md owns candidates, current stage, next action, owner, and last update. Keep candidate data minimal and assessments job-related. Update material transitions; retire the tracker when the role is closed and remaining actions are resolved.",
 };
 
-export async function resolveSession(input: NewSession, base: string): Promise<NewSession> {
+export async function checkoutBranches(
+  path: string,
+  base: string,
+  providers: ReadonlyMap<string, CheckoutProvider>,
+): Promise<CheckoutBranches> {
+  const repoPath = await realpath(await resolveDirectory(path, base));
+  for (const [provider, checkout] of providers) {
+    const branches = await checkout.branches(repoPath);
+    if (branches !== undefined) return { provider, ...branches };
+  }
+  throw new Error("No enabled checkout provider supports this repository");
+}
+
+export async function resolveSession(
+  input: NewSession,
+  base: string,
+  checkout?: { home: string; requestId: string; providers: ReadonlyMap<string, CheckoutProvider> },
+  allowNewDirectory = false,
+): Promise<NewSession & { scaffold?: true }> {
   const name = input.name.trim();
   if (!name || name.length > 80) throw new Error("A session needs a name of at most 80 characters");
   if (input.brief !== undefined && !input.brief.trim())
@@ -39,16 +60,68 @@ export async function resolveSession(input: NewSession, base: string): Promise<N
   if (input.agentRole !== "head" && input.agentRole !== "worker")
     throw new Error("Unknown agent role");
   const repoPath = await realpath(await resolveDirectory(input.repoPath, base));
-  const codeDirectory = await realpath(await resolveDirectory(input.codeDirectory, repoPath));
+  let codeDirectory = await realpath(await resolveDirectory(input.codeDirectory, repoPath));
   if (!input.ownedDirectory.trim()) throw new Error("An owned directory is required");
-  const ownedDirectory = await realpath(await resolveDirectory(input.ownedDirectory, repoPath));
-  const instruction = await readDirectoryFile(ownedDirectory, "instruction.md").catch(() => {
-    throw new Error(
-      "Choose an existing directory with a readable instruction.md. Create new work through chat using the task skill first.",
-    );
-  });
-  if (!instruction.text.trim()) throw new Error("The directory's instruction.md is empty");
-  return { ...input, name, repoPath, codeDirectory, ownedDirectory };
+  let scaffold = false;
+  const ownedDirectory = await resolveDirectory(input.ownedDirectory, repoPath)
+    .then((path) => realpath(path))
+    .catch(async (error: unknown) => {
+      if (
+        !allowNewDirectory ||
+        !input.brief ||
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "ENOENT"
+      )
+        throw error;
+      const parent = await realpath(
+        await resolveDirectory(dirname(input.ownedDirectory), repoPath),
+      );
+      const leaf = basename(input.ownedDirectory);
+      if (!leaf || leaf === "." || leaf === "..") throw error;
+      scaffold = true;
+      return join(parent, leaf);
+    });
+  if (!scaffold) {
+    const instruction = await readDirectoryFile(ownedDirectory, "instruction.md").catch(() => {
+      throw new Error(
+        "Choose an existing directory with a readable instruction.md, or choose a new directory when branching.",
+      );
+    });
+    if (!instruction.text.trim()) throw new Error("The directory's instruction.md is empty");
+  }
+  if (input.worktree !== undefined) {
+    if (checkout === undefined || !checkout.requestId.trim())
+      throw new Error("Worktrees can only be created for new sessions");
+    const provider = checkout.providers.get(input.worktree.provider);
+    if (provider === undefined) throw new Error("The checkout provider is disabled or unavailable");
+    const branches = await provider.branches(repoPath);
+    if (!branches?.branches.includes(input.worktree.branch))
+      throw new Error("Choose an available starting branch");
+    const name = createHash("sha256")
+      .update(
+        `${repoPath}\0${checkout.requestId}\0${input.worktree.provider}\0${input.worktree.branch}`,
+      )
+      .digest("hex")
+      .slice(0, 24);
+    const parent = join(checkout.home, "worktrees");
+    await mkdir(parent, { recursive: true });
+    // Existing homes keep their original root ignore file.
+    await writeFile(join(parent, ".gitignore"), "*\n", { flag: "wx" }).catch((error: unknown) => {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    });
+    codeDirectory = join(parent, `session-${name}`);
+    await provider.create(repoPath, codeDirectory, input.worktree.branch);
+    codeDirectory = await realpath(codeDirectory);
+  }
+  return {
+    ...input,
+    name,
+    repoPath,
+    codeDirectory,
+    ownedDirectory,
+    ...(scaffold ? { scaffold: true } : {}),
+  };
 }
 
 export async function browseFolders(

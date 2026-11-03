@@ -239,7 +239,7 @@ const ACTIONS = {
   "feed.goal": listed("feed: goal", "one goal's stream", pickGoal, front),
   "root.next": listed("next root", "the next older root", () => nextRoot(1)),
   "root.previous": listed("previous root", "the next newer root", () => nextRoot(-1)),
-  roots: listed("roots", "switch, start, rename, archive", () => toggleRoots(true)),
+  roots: listed("threads", "switch, start, rename, archive", () => toggleRoots(true)),
   expand: listed("expand all", "open or fold every card", toggleExpandAll),
   mode: listed("steer or follow-up", "what a message to a busy run does", toggleMode),
   drafts: listed("drafts", "save what is typed, or restore one", openDrafts),

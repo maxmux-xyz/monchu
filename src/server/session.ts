@@ -439,7 +439,10 @@ export default defineFacet<Principal>(
         createRoot: ({ requestId }) => monchu().createRoot(requestId),
         browseFolders: ({ path, base, query }) => monchu().browseFolders(path, base, query),
         discoverDirectories: ({ path }) => monchu().discoverDirectories(path),
-        createSession: ({ input, requestId }) => monchu().createSession(input, requestId),
+        checkoutBranches: ({ path }) => monchu().checkoutBranches(path),
+        createSession: ({ input, requestId, branch }) =>
+          monchu().createSession(input, requestId, branch),
+        retrySessionSetup: ({ root, useExisting }) => monchu().retrySessionSetup(root, useExisting),
         assignDirectory: ({ root, input }) => monchu().assignDirectory(root, input),
         listDirectory: ({ root, path }) => monchu().listDirectory(root, path),
         readDirectoryFile: ({ root, path }) => monchu().readDirectoryFile(root, path),

@@ -29,7 +29,7 @@ Settings never go in a plugin's code, so a synced plugin can run everywhere whil
 
 ## Versions
 
-`monchu.apiVersion` is the plugin API this Monchu has (`PLUGIN_API_VERSION` in `monchu/plugin`, 2 now). A plugin synced to devices that update at different times says which versions it works with in `package.json`, `"monchu": { "api": 2 }` or `[1, 2]`, and a Monchu without one of them skips it with a warning instead of loading code that would fail. A plugin that supports several checks `apiVersion` itself; Monchus from before version 2 have none.
+`monchu.apiVersion` is the plugin API this Monchu has (`PLUGIN_API_VERSION` in `monchu/plugin`, 3 now). A plugin synced to devices that update at different times says which versions it works with in `package.json`, `"monchu": { "api": 3 }` or `[2, 3]`, and a Monchu without one of them skips it with a warning instead of loading code that would fail. A plugin that supports several checks `apiVersion` itself; Monchus from before version 2 have none.
 
 ## Writing one
 
@@ -143,6 +143,10 @@ Guards fail closed, as in Pi: a `tool_call` handler that throws blocks the call,
 ### Agents
 
 `monchu.agents` (Monchu's own) reads and messages Monchu's crew inside a Durable transaction: `whois(tx, id)` says whether a conversation is a front or a worker, `workers(tx, front)` and `goals(tx, front)` list a front's crew and goals, `rootOf(tx, id)` the front a conversation's crew answers to, `messageWorker(tx, worker, text, requestId)` messages a worker as its parent would, `updateText`/`noticeText` format a worker update or a notice from Monchu itself, `labelReply(tx, front, entry, label)` labels a message in the user's inbox (its kind and goal; never over the front's own label), `ask(tx, front, { key, requestId, headline, from?, goal? })` opens an ask for something only the user can do (pushed at once, its tap opening Monchu, never a link: a link the user may follow goes in the notice; filed beside the notice the plugin sends the front with that request ID, tied to `from`'s goal) and `closeAsk(tx, front, key, state)` closes it when it no longer waits, and `profiles` are the worker profiles. Reach a front with Durable's `conversation(id).submit`. `shortId(id)` is the id Monchu shows.
+
+### Repository checkouts
+
+`registerCheckouts(provider)` registers one checkout provider for the plugin. `branches(repoPath)` returns `{ branches, current }`, or `undefined` for an unsupported repository; it must not mutate or snapshot the source. `create(repoPath, path, branch)` creates an isolated checkout at the server-selected path and must safely reuse it on replay only when it belongs to that repository. Registration is available from plugin API 3. The provider is offered by the plugin's name in session setup and is unavailable when the plugin is disabled. Failures reach the caller. The bundled `worktrees` plugin handles Git worktrees and jj workspaces; the core stores the resulting source path without depending on either CLI.
 
 ## Loading, reload and failures
 

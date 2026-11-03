@@ -39,6 +39,7 @@ import { noticeText, systemNoticeText } from "../api/notices.ts";
 import {
   PLUGIN_API_VERSION,
   type AfterAdmission,
+  type CheckoutProvider,
   type FrontReplyEvent,
   type InputChangeEvent,
   type InputEvent,
@@ -180,7 +181,7 @@ type PluginSource = "bundled" | "home" | "local";
  * Durable redeclares every tool when their order changes, so a new bundled plugin, or one moved out of the core in the
  * core's old place, never reorders the tools conversations already have.
  */
-const BUNDLED_ORDER = ["classifier", "fnox", "jj", "herdr", "browser", "keys"];
+const BUNDLED_ORDER = ["classifier", "fnox", "jj", "herdr", "browser", "keys", "worktrees"];
 
 function bundledPlace(plugin: { source: PluginSource; name: string }): number {
   const place = BUNDLED_ORDER.indexOf(plugin.name);
@@ -254,6 +255,7 @@ type Contribution = {
   readonly wants: readonly PluginWant[];
   /** The secret store it registered. */
   readonly secrets: SecretStore | undefined;
+  readonly checkouts: CheckoutProvider | undefined;
   readonly input: readonly PluginEvents["input"][];
   readonly inputChange: readonly PluginEvents["input_change"][];
   readonly frontReply: readonly PluginEvents["front_reply"][];
@@ -291,6 +293,7 @@ export type PluginBuild = {
   readonly wants: readonly PluginWant[];
   /** The one store a plugin keeps secret values in, which the vault uses while this build runs. */
   readonly secrets: SecretStore | undefined;
+  readonly checkouts: ReadonlyMap<string, CheckoutProvider>;
   readonly front: FrontEvents;
   readonly status: readonly PluginStatus[];
   readonly warnings: readonly string[];
@@ -734,6 +737,11 @@ export class Plugins {
           ),
           wants: used.flatMap((contribution) => contribution.wants),
           secrets: secrets?.secrets,
+          checkouts: new Map(
+            used.flatMap((item) =>
+              item.checkouts === undefined ? [] : [[item.found.name, item.checkouts]],
+            ),
+          ),
           front: frontEvents(used),
           status,
           warnings,
@@ -927,6 +935,7 @@ export class Plugins {
     const providers: { provider: Provider; login: PluginLogin }[] = [];
     const wants: PluginWant[] = [];
     let secrets: SecretStore | undefined;
+    let checkouts: CheckoutProvider | undefined;
     const handlers: { [E in keyof PluginEvents]: PluginEvents[E][] } = {
       tool_call: [],
       tool_result: [],
@@ -1099,6 +1108,13 @@ export class Plugins {
             throw new Error(`its secret store has no ${method} function`);
         secrets = store;
       },
+      registerCheckouts: (provider) => {
+        opened();
+        if (checkouts !== undefined) throw new Error("it registers two checkout providers");
+        if (typeof provider.branches !== "function" || typeof provider.create !== "function")
+          throw new Error("its checkout provider needs branches and create functions");
+        checkouts = provider;
+      },
     };
     try {
       await withTimeout(plugin(api), SETUP_TIMEOUT_MS);
@@ -1170,6 +1186,7 @@ export class Plugins {
       providers,
       wants,
       secrets,
+      checkouts,
       input: handlers.input,
       inputChange: handlers.input_change,
       frontReply: handlers.front_reply,

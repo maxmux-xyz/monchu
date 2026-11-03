@@ -448,11 +448,17 @@ async function runMcp(text: string): Promise<void> {
   }
 }
 
-/** `/model` and `/thinking` change only the shown session. */
+/** `/model` and `/thinking` pick for the shown session, optionally saving its role default. */
 async function runModel(thinking: boolean, search: string): Promise<void> {
   const at = showing();
   const worker = at.shown.value;
   const name = worker ?? "this session";
+  const role =
+    worker !== undefined ||
+    roots.value.find((root) => root.id === at.id)?.directory?.agentRole === "worker"
+      ? "worker"
+      : "head";
+  const alternate = `Make default for ${role}s`;
   const current = await at.root.modelChoice(worker);
   if (!at.open) return;
   if (thinking) {
@@ -470,11 +476,14 @@ async function runModel(thinking: boolean, search: string): Promise<void> {
             : []),
         ],
       })),
+      alternate,
     );
     const level = current.thinkingLevels.find((each) => each === picked?.id);
     if (picked === undefined || level === undefined) return;
-    await at.root.pickModel({ thinkingLevel: level }, false, worker);
-    return at.notice(`${name} thinking · ${level} · this conversation only`);
+    await at.root.pickModel({ thinkingLevel: level }, picked.alternate, worker);
+    return at.notice(
+      `${name} thinking · ${level} · ${picked.alternate ? `saved as ${role} default` : "this conversation only"}`,
+    );
   }
   if (current.models.length === 0)
     return at.notice("no models with credentials yet · /login first", "warning");
@@ -507,17 +516,19 @@ async function runModel(thinking: boolean, search: string): Promise<void> {
           : []),
       ],
     })),
-    undefined,
+    alternate,
     search.trim(),
   );
   const model = models.find((each) => key(each.provider, each.id) === picked?.id);
   if (picked === undefined || model === undefined) return;
   await at.root.pickModel(
     { model: { provider: model.provider, modelId: model.id } },
-    false,
+    picked.alternate,
     worker,
   );
-  at.notice(`${name} model · ${picked.id} · this conversation only`);
+  at.notice(
+    `${name} model · ${picked.id} · ${picked.alternate ? `saved as ${role} default` : "this conversation only"}`,
+  );
 }
 
 /** A root action from the roots menu: the list shows what it did, a refusal (a working root) shows as a warning. */
@@ -529,7 +540,7 @@ async function rootAction(run: () => Promise<unknown>): Promise<void> {
   }
 }
 
-/** `/roots new`: start a root and show it; it names itself from its first message. */
+/** `/threads new`: start a root and show it; it names itself from its first message. */
 export function newRoot(): Promise<void> {
   return rootAction(async () => switchRoot(await client().createRoot(randomId())));
 }
@@ -553,7 +564,7 @@ export function archiveRoot(id: string, archived: boolean): Promise<void> {
   return rootAction(() => client().archiveRoot(id, archived));
 }
 
-/** `/roots`: the menu, or one of its actions by id prefix; the shown root when none is given. */
+/** `/threads`: the menu, or one of its actions by id prefix; the shown root when none is given. */
 async function runRoots(command: RootsCommand): Promise<void> {
   const at = showing();
   const id = at.id;
@@ -787,7 +798,7 @@ async function runInput(
       );
       break;
     }
-    case "/roots":
+    case "/threads":
       return await runRoots(parseRootsCommand(input.text));
     case "/help":
       return at.notice(helpText("web", client().commands()));

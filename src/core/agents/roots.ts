@@ -7,6 +7,7 @@ import {
   LiveDoc,
   section,
   type ConversationId,
+  type Cursor,
   type DocumentReader,
   type Harness,
   type ToolExecutionApi,
@@ -92,15 +93,24 @@ async function handOff(
 }
 
 /** When the front last finished a reply, if its newest message is one. */
-async function lastAnswer(harness: Harness, id: ConversationId, context: Context) {
+async function lastAnswer(harness: Harness, id: ConversationId, context: Context, after?: number) {
   return harness.commit(async (tx) => {
-    const { items } = await tx.scanEntries({ conversationId: id }, 10);
-    for (const entry of items) {
-      const message = entry.model?.at(-1);
-      if (message === undefined || message.role === "system") continue;
-      if (!AssistantEntry.is(entry) || message.role !== "assistant") return undefined;
-      return message.timestamp + (message.durationMs ?? 0);
-    }
+    let cursor: Cursor | undefined;
+    do {
+      const page = await tx.scanEntries({ conversationId: id, order: "descending" }, 10, cursor);
+      for (const entry of page.items) {
+        const message = entry.model?.at(-1);
+        if (message === undefined || message.role === "system") continue;
+        if (AssistantEntry.is(entry) && message.role === "assistant") {
+          const end = message.timestamp + (message.durationMs ?? 0);
+          if (after === undefined) return end;
+          if (end <= after) return undefined;
+          if (message.content.some((part) => part.type === "text" && part.text.trim())) return end;
+        } else if (after === undefined) return undefined;
+        else if (message.timestamp <= after) return undefined;
+      }
+      cursor = after === undefined ? undefined : page.next;
+    } while (cursor !== undefined);
     return undefined;
   }, context);
 }
@@ -127,7 +137,11 @@ export async function summarize(
     startup?.state.status === "terminal" &&
     (startup.state.outcome.status === "failed" || startup.state.outcome.status === "faulted")
       ? startup.state.outcome.error.message
-      : undefined;
+      : root.preparing &&
+          startup?.state.status === "terminal" &&
+          startup.state.outcome.status === "aborted"
+        ? "Workspace setup stopped"
+        : undefined;
   const asks =
     root.directory === undefined
       ? undefined
@@ -135,14 +149,24 @@ export async function summarize(
   const needsInput =
     (asks?.items.some((item) => item.kind === "ask" && item.state === "open") ?? false) ||
     (asks?.pending?.some((item) => item.state === "open") ?? false);
-  // Scheduled jobs waiting for their slot don't make a root active; a run they wake shows as a busy worker.
-  let status: RootStatus = "idle";
-  if (front === "working" || busy > 0 || running > 0) status = "working";
-  else if (!shown) {
-    const answered = await lastAnswer(harness, root.id, context);
-    if (answered !== undefined && answered > (root.seenAt ?? root.createdAt)) status = "done";
-  }
-  if (root.directory !== undefined) status = front === "working" || starting ? "working" : "idle";
+  const seen = root.seenAt ?? root.createdAt;
+  const working =
+    front === "working" || (root.directory === undefined ? busy > 0 || running > 0 : starting);
+  const answered =
+    shown || (root.directory === undefined && working)
+      ? undefined
+      : await lastAnswer(
+          harness,
+          root.id,
+          context,
+          root.directory === undefined ? undefined : seen,
+        );
+  const unread = answered !== undefined && answered > seen;
+  const status: RootStatus = working
+    ? "working"
+    : unread && root.directory === undefined
+      ? "done"
+      : "idle";
   return {
     id: shortId(root.id),
     label: root.label,
@@ -156,6 +180,8 @@ export async function summarize(
     jobs: { running, scheduled },
     ...(root.directory === undefined ? {} : { directory: root.directory, needsInput }),
     ...(root.spawnedBy === undefined ? {} : { spawnedBy: shortId(root.spawnedBy) }),
+    ...(unread ? { unread: true } : {}),
+    ...(root.preparing ? { preparing: true } : {}),
     ...(error === undefined ? {} : { error }),
   };
 }

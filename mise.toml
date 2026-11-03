@@ -67,6 +67,10 @@ description = 'Run the built app, building when needed'
 depends = ['build']
 run = 'node dist/main.js'
 
+[tasks.server]
+description = 'Control the built web server: up, down, restart, status'
+run = 'node scripts/server.ts'
+
 [tasks.dev]
 description = 'Run from source with Node type stripping, without a watcher'
 depends = ['install']
